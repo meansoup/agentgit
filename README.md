@@ -32,9 +32,24 @@ AgentGit uses "Timeline-based Linking" to associate requests with code changes. 
 
 ## 📦 Installation
 
+### Homebrew (macOS / Linux)
+```bash
+# Coming soon!
+# brew tap meansoup/tap
+# brew install agentgit
+```
+
+### APT (Ubuntu / Debian)
+1. Download the latest `.deb` file from [Releases](https://github.com/meansoup/agentgit/releases).
+2. Install it using `apt`:
+```bash
+sudo apt install ./agentgit_0.1.0_amd64.deb
+```
+
+### From Source
 ```bash
 # Clone the repository
-git clone https://github.com/minkuik/agentgit.git
+git clone https://github.com/meansoup/agentgit.git
 cd agentgit
 
 # Build and install

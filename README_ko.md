@@ -32,6 +32,21 @@ AgentGit은 "시간축 기반 연결" 규칙을 사용하여 요청과 코드 �
 
 ## 📦 설치 방법
 
+### Homebrew (macOS / Linux)
+```bash
+# 곧 지원 예정입니다!
+# brew tap meansoup/tap
+# brew install agentgit
+```
+
+### APT (Ubuntu / Debian)
+1. [Releases](https://github.com/meansoup/agentgit/releases) 페이지에서 최신 `.deb` 파일을 다운로드합니다.
+2. `apt` 명령어로 설치합니다:
+```bash
+sudo apt install ./agentgit_0.1.0_amd64.deb
+```
+
+### 소스 코드로 설치
 ```bash
 # 저장소 클론
 git clone https://github.com/minkuik/agentgit.git
