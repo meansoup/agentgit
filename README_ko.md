@@ -34,9 +34,8 @@ AgentGit은 "시간축 기반 연결" 규칙을 사용하여 요청과 코드 �
 
 ### Homebrew (macOS / Linux)
 ```bash
-# 곧 지원 예정입니다!
-# brew tap meansoup/tap
-# brew install agentgit
+brew tap meansoup/tap
+brew install agentgit
 ```
 
 ### APT (Ubuntu / Debian)

@@ -34,9 +34,8 @@ AgentGit uses "Timeline-based Linking" to associate requests with code changes. 
 
 ### Homebrew (macOS / Linux)
 ```bash
-# Coming soon!
-# brew tap meansoup/tap
-# brew install agentgit
+brew tap meansoup/tap
+brew install agentgit
 ```
 
 ### APT (Ubuntu / Debian)
