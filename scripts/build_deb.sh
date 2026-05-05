@@ -4,7 +4,9 @@
 set -e
 
 APP_NAME="agentgit"
-VERSION="0.1.0"
+VERSION="${VERSION:-0.1.0}"
+# Remove 'v' prefix if present for deb versioning
+VERSION="${VERSION#v}"
 ARCH=$(go env GOARCH)
 # Map Go arch to Debian arch
 if [ "$ARCH" == "amd64" ]; then
