@@ -46,6 +46,9 @@ sudo apt install ./agentgit_0.1.0_amd64.deb
 ```
 
 ### From Source
+
+**Prerequisites:** [Go](https://go.dev/doc/install) 1.23 or higher.
+
 ```bash
 # Clone the repository
 git clone https://github.com/meansoup/agentgit.git
@@ -71,4 +74,4 @@ Or specify a target path:
 
 ## 📄 License
 
-[Specify License, e.g., MIT]
+MIT

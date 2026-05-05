@@ -46,9 +46,12 @@ sudo apt install ./agentgit_0.1.0_amd64.deb
 ```
 
 ### 소스 코드로 설치
+
+**사전 요구사항:** [Go](https://go.dev/doc/install) 1.23 이상.
+
 ```bash
 # 저장소 클론
-git clone https://github.com/minkuik/agentgit.git
+git clone https://github.com/meansoup/agentgit.git
 cd agentgit
 
 # 빌드 및 설치
@@ -71,4 +74,4 @@ Git 저장소 내부에서 `agentgit`을 실행하세요:
 
 ## 📄 라이선스
 
-[라이선스 명시, 예: MIT]
+MIT
