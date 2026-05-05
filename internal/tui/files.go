@@ -102,30 +102,47 @@ func (f *Files) View(width, height int) string {
 
 func (f *Files) renderPreview(file model.ChangedFile, width, height int) string {
 	cs := f.app.changeSets[f.app.selectedIdx]
-	var content string
+	var diff model.FileDiff
 	var err error
 
 	if cs.Type == "commit" {
-		content, err = git.GetFileContent(cs.CommitHash, file.Path)
+		diff, err = git.FileDiff(cs.CommitHash, file.Path)
 	} else {
-		content, err = git.GetWorkingTreeFileContent(file.Path)
+		diff, err = git.WorkingTreeDiff(file.Path)
 	}
 
 	if err != nil {
-		return fmt.Sprintf(" Error loading preview: %v", err)
+		return fmt.Sprintf(" Error loading diff: %v", err)
 	}
 
-	lines := strings.Split(content, "\n")
+	if diff.IsBinary {
+		return " Binary file - no preview available"
+	}
+
+	lines := strings.Split(diff.Patch, "\n")
 	var previewLines []string
-	previewLines = append(previewLines, titleStyle.Render(fmt.Sprintf(" Preview: %s ", file.Path)))
+	previewLines = append(previewLines, titleStyle.Render(fmt.Sprintf(" Diff Preview: %s ", file.Path)))
 
 	for i, line := range lines {
 		if i >= height-1 {
 			break
 		}
-		// Replace tabs with spaces for consistent rendering
-		line = strings.ReplaceAll(line, "\t", "    ")
-		previewLines = append(previewLines, " "+truncate(line, width-2))
+		
+		// Basic diff highlighting
+		renderedLine := " " + truncate(line, width-2)
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			renderedLine = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render(renderedLine)
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			renderedLine = lipgloss.NewStyle().Foreground(lipgloss.Color("197")).Render(renderedLine)
+		} else if strings.HasPrefix(line, "@@") {
+			renderedLine = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(renderedLine)
+		}
+
+		previewLines = append(previewLines, renderedLine)
+	}
+
+	if len(previewLines) == 1 {
+		return previewLines[0] + "\n No changes detected"
 	}
 
 	return strings.Join(previewLines, "\n")
