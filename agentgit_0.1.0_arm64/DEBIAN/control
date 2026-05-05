@@ -1,8 +1,0 @@
-Package: agentgit
-Version: 0.1.0
-Section: utils
-Priority: optional
-Architecture: arm64
-Maintainer: meansoup <meansoup@github.com>
-Description: AgentGit is a TUI for checking AI agent code changes.
- Timeline-based TUI for reviewing AI agent-led development.

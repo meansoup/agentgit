@@ -1,1 +1,18 @@
+# Binaries
 agentgit
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Packages
+*.deb
+agentgit_*_amd64/
+agentgit_*_arm64/
+
+# Test binary
+agentgit.test
+
+# Output of 'go build'
+/agentgit
