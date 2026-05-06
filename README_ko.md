@@ -58,6 +58,27 @@ cd agentgit
 go build -o agentgit main.go
 ```
 
+## 🔄 업그레이드
+
+### Homebrew
+```bash
+brew update
+brew upgrade agentgit
+```
+
+### APT
+[Releases](https://github.com/meansoup/agentgit/releases) 페이지에서 새로운 `.deb` 파일을 다운로드한 후 다음을 실행하세요:
+```bash
+sudo apt install ./agentgit_새버전_amd64.deb
+```
+
+### 소스 코드로 설치
+```bash
+cd agentgit
+git pull
+go build -o agentgit main.go
+```
+
 ## 📖 사용법
 
 Git 저장소 내부에서 `agentgit`을 실행하세요:
