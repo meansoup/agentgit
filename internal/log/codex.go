@@ -11,13 +11,37 @@ import (
 	"github.com/minkuik/agentgit/internal/model"
 )
 
-// CodexLog represents a Codex log entry
+// CodexLog represents a Codex log entry with potential nested structures
 type CodexLog struct {
-	Type      string    `json:"type"`
-	Timestamp string    `json:"timestamp"`
-	SessionID string    `json:"sessionId"`
-	CWD       string    `json:"cwd"`
-	Message   string    `json:"message"`
+	EventMsg     *CodexEventMsg     `json:"event_msg"`
+	ResponseItem *CodexResponseItem `json:"response_item"`
+	SessionMeta  *CodexSessionMeta  `json:"session_meta"`
+	Timestamp    string             `json:"timestamp"`
+	SessionID    string             `json:"sessionId"`
+	// Legacy or flat fields
+	Type    string `json:"type"`
+	CWD     string `json:"cwd"`
+	Message string `json:"message"`
+}
+
+type CodexEventMsg struct {
+	Payload struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"payload"`
+}
+
+type CodexResponseItem struct {
+	Payload struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"payload"`
+}
+
+type CodexSessionMeta struct {
+	Payload struct {
+		CWD string `json:"cwd"`
+	} `json:"payload"`
 }
 
 // LoadCodexRequests loads user requests from Codex logs
@@ -49,6 +73,9 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 			return nil
 		}
 
+		// Each file is usually one session, track CWD within the file
+		var currentCWD string
+
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -60,12 +87,29 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				continue
 			}
 
-			// Filter: only user messages in matching cwd
-			if entry.Type != "user" {
+			// 1. Update CWD if meta info is present
+			if entry.SessionMeta != nil && entry.SessionMeta.Payload.CWD != "" {
+				currentCWD = entry.SessionMeta.Payload.CWD
+			} else if entry.CWD != "" {
+				currentCWD = entry.CWD
+			}
+
+			// 2. Extract user message text
+			var rawText string
+			if entry.EventMsg != nil && entry.EventMsg.Payload.Type == "user_message" {
+				rawText = entry.EventMsg.Payload.Message
+			} else if entry.ResponseItem != nil && entry.ResponseItem.Payload.Role == "user" {
+				rawText = entry.ResponseItem.Payload.Content
+			} else if entry.Type == "user" {
+				rawText = entry.Message
+			}
+
+			if rawText == "" {
 				continue
 			}
 
-			if !pathMatches(entry.CWD, gitRoot) {
+			// 3. Filter by CWD
+			if !pathMatches(currentCWD, gitRoot) {
 				continue
 			}
 
@@ -74,7 +118,7 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				timestamp = time.Now()
 			}
 
-			text := truncateText(entry.Message, 100)
+			text := truncateText(rawText, 100)
 			if text == "" {
 				continue
 			}
