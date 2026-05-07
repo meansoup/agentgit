@@ -26,12 +26,12 @@ func LinkRequestsToChangesets(gitRoot string, commitCount int) ([]model.ChangeSe
 	allRequests := append(claudeRequests, geminiRequests...)
 	allRequests = append(allRequests, codexRequests...)
 
-	// Sort commits by time (oldest first) for chronological linking
+	// Sort commits by time (oldest first)
 	sort.Slice(commits, func(i, j int) bool {
 		return commits[i].Timestamp.Before(commits[j].Timestamp)
 	})
 
-	// Sort requests by time (oldest first) for chronological linking
+	// Sort requests by time (oldest first)
 	sort.Slice(allRequests, func(i, j int) bool {
 		return allRequests[i].Timestamp.Before(allRequests[j].Timestamp)
 	})
@@ -39,26 +39,26 @@ func LinkRequestsToChangesets(gitRoot string, commitCount int) ([]model.ChangeSe
 	var changeSets []model.ChangeSet
 	usedRequestIDs := make(map[string]bool)
 
-	// 1. Link requests to commits chronologically
+	// 1. Link requests to commits
+	// A request belongs to a commit if it occurred BEFORE that commit 
+	// (but after the previous commit). 
+	// We add a small buffer (e.g., 2 minutes) for commits made slightly before the actual request logging.
 	for i, commit := range commits {
 		var linkedRequests []model.LinkedRequest
-
-		// Determine the time range for this commit:
-		// - start: after the previous commit (or from beginning if first commit)
-		// - end: before this commit + 10-minute buffer (for clock skew)
+		
 		var startTime time.Time
 		if i > 0 {
 			startTime = commits[i-1].Timestamp
 		} else {
-			startTime = time.Time{} // epoch, effectively no lower bound
+			startTime = time.Time{}
 		}
-		endTime := commit.Timestamp.Add(10 * time.Minute)
+		
+		// Buffer: Requests occurring up to 2 mins AFTER the commit might still be related 
+		// if the commit happened and then the request was logged, but usually it's the other way.
+		// Let's stick to: requests BEFORE the commit but AFTER previous.
+		endTime := commit.Timestamp
 
 		for _, req := range allRequests {
-			// A request belongs to this commit if:
-			// - it hasn't been used yet
-			// - it's after the previous commit
-			// - it's before this commit (+ buffer)
 			if !usedRequestIDs[req.ID] &&
 				req.Timestamp.After(startTime) &&
 				!req.Timestamp.After(endTime) {
@@ -83,7 +83,7 @@ func LinkRequestsToChangesets(gitRoot string, commitCount int) ([]model.ChangeSe
 		})
 	}
 
-	// 2. Handle working tree changes (remaining requests after the latest commit)
+	// 2. Handle working tree changes (all remaining requests)
 	wtFiles, _ := git.WorkingTreeFiles()
 	var wtRequests []model.LinkedRequest
 	for _, req := range allRequests {
@@ -93,24 +93,42 @@ func LinkRequestsToChangesets(gitRoot string, commitCount int) ([]model.ChangeSe
 		}
 	}
 
+	// Even if no files changed, if there are recent requests, show them as uncommitted block
 	if len(wtFiles) > 0 || len(wtRequests) > 0 {
+		title := "Working Tree Changes"
+		if len(wtRequests) > 0 && len(wtFiles) == 0 {
+			title = "Recent Requests (Not Committed)"
+		}
+		
 		changeSets = append(changeSets, model.ChangeSet{
 			ID:        "working-tree",
 			Type:      "uncommitted",
-			Title:     "Working Tree Changes",
+			Title:     title,
 			Timestamp: time.Now().UTC(),
 			FileCount: len(wtFiles),
 			Requests:  wtRequests,
 		})
 	}
 
-	// 3. Reverse for newest-first display
-	for i := 0; i < len(changeSets)/2; i++ {
-		j := len(changeSets) - 1 - i
-		changeSets[i], changeSets[j] = changeSets[j], changeSets[i]
-	}
+	// 3. Sort changesets by time (newest first)
+	// For each changeset, we consider the maximum of its own timestamp and its latest request timestamp
+	sort.Slice(changeSets, func(i, j int) bool {
+		ti := getEffectiveTime(changeSets[i])
+		tj := getEffectiveTime(changeSets[j])
+		return ti.After(tj)
+	})
 
 	return changeSets, nil
+}
+
+func getEffectiveTime(cs model.ChangeSet) time.Time {
+	t := cs.Timestamp
+	for _, req := range cs.Requests {
+		if req.Timestamp.After(t) {
+			t = req.Timestamp
+		}
+	}
+	return t
 }
 
 func countFilesInCommit(hash string) int {

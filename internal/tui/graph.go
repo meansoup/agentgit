@@ -20,9 +20,14 @@ func NewGraph(app *App) *Graph {
 // View renders the graph screen
 func (g *Graph) View(width, height int) string {
 	var allLines []string
+	
+	// Track the starting line index of each changeset
+	csStartLines := make([]int, len(g.app.changeSets))
 
-	// Generate all potential lines first to determine total height and selected line position
+	// Generate all potential lines
 	for i, cs := range g.app.changeSets {
+		csStartLines[i] = len(allLines)
+		
 		// Render each linked request
 		for _, req := range cs.Requests {
 			reqLine := g.renderRequest(req, i == g.app.selectedIdx, width)
@@ -39,26 +44,22 @@ func (g *Graph) View(width, height int) string {
 		return ""
 	}
 
-	// Calculate the line index of the selected item
-	selectedLineIndex := 0
-	currentCsLineCount := 0
-	for i, cs := range g.app.changeSets {
-		// Count lines for requests
-		currentCsLineCount += len(cs.Requests)
-		// Count line for changeset itself
-		currentCsLineCount++
-
-		if i == g.app.selectedIdx {
-			selectedLineIndex = currentCsLineCount - 1 // The last line of the selected changeset is what we want visible
-			break
+	// Selection and Scrolling Logic
+	selectedTop := csStartLines[g.app.selectedIdx]
+	
+	// If it's the very first item (idx 0), we must ensure line 0 is visible
+	if g.app.selectedIdx == 0 {
+		g.scrollOffset = 0
+	} else if selectedTop < g.scrollOffset {
+		// If selected item's top is above current view
+		g.scrollOffset = selectedTop
+	} else {
+		// If selected item's BOTTOM is below current view
+		// Calculate the line index of the changeset itself
+		selectedBottom := selectedTop + len(g.app.changeSets[g.app.selectedIdx].Requests)
+		if selectedBottom >= g.scrollOffset+height {
+			g.scrollOffset = selectedBottom - height + 1
 		}
-	}
-
-	// Adjust scroll offset to keep selected item in view
-	if selectedLineIndex < g.scrollOffset {
-		g.scrollOffset = selectedLineIndex
-	} else if selectedLineIndex >= g.scrollOffset+height {
-		g.scrollOffset = selectedLineIndex - height + 1
 	}
 
 	// Ensure scrollOffset is within bounds
@@ -68,7 +69,7 @@ func (g *Graph) View(width, height int) string {
 	if g.scrollOffset > numDisplayLines-height {
 		g.scrollOffset = numDisplayLines - height
 	}
-	if g.scrollOffset < 0 { // If height is greater than total lines
+	if g.scrollOffset < 0 {
 		g.scrollOffset = 0
 	}
 
@@ -80,7 +81,7 @@ func (g *Graph) View(width, height int) string {
 	}
 
 	if start >= end {
-		return "" // Nothing to display
+		return ""
 	}
 
 	return strings.Join(allLines[start:end], "\n")
@@ -92,11 +93,14 @@ func (g *Graph) renderRequest(req model.LinkedRequest, isSelected bool, width in
 	text := truncate(req.Text, width-40)
 
 	marker := "○"
+	prefix := "  "
 	if isSelected {
 		marker = selectedStyle.Render(marker)
+		prefix = selectedStyle.Render("> ")
 	}
 
-	return fmt.Sprintf("%s %s  %s %s",
+	return fmt.Sprintf("%s%s %s  %s %s",
+		prefix,
 		marker,
 		dimStyle.Render(timeStr),
 		requestStyle.Render(providerLabel),
@@ -115,14 +119,14 @@ func (g *Graph) renderChangeSet(cs model.ChangeSet, isSelected bool, width int) 
 		timeStr = cs.Timestamp.Format("01-02 15:04")
 		hashOrLabel = shortSHA(cs.CommitHash)
 	} else {
-		hashOrLabel = "(uncommitted)"
+		hashOrLabel = "(working tree)"
 	}
 
 	text := truncate(cs.Title, width-50)
 
-	prefix := "└─"
+	prefix := "  └─"
 	if isSelected {
-		prefix = selectedStyle.Render(prefix)
+		prefix = selectedStyle.Render("> └─")
 		marker = selectedStyle.Render(marker)
 	}
 
