@@ -52,10 +52,11 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	codexDir := filepath.Join(homedir, ".codex", "sessions")
-
-	if _, err := os.Stat(codexDir); os.IsNotExist(err) {
-		return nil, nil // No Codex logs yet
+	// Ubuntu/Linux 등에서 Codex 로그가 존재할 수 있는 다양한 경로 후보
+	possibleDirs := []string{
+		filepath.Join(homedir, ".codex", "sessions"),
+		filepath.Join(homedir, ".codex", "logs"),
+		filepath.Join(homedir, ".agent", "codex", "sessions"),
 	}
 
 	// Normalize gitRoot for comparison
@@ -67,91 +68,93 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 
 	var requests []model.LinkedRequest
 
-	// Recursively read all JSONL files in the directory
-	err = filepath.Walk(codexDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors
+	for _, codexDir := range possibleDirs {
+		if _, err := os.Stat(codexDir); os.IsNotExist(err) {
+			continue
 		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".jsonl") {
+
+		// Recursively read all JSONL files in the directory
+		err = filepath.Walk(codexDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // Skip errors
+			}
+			if info.IsDir() || !strings.HasSuffix(info.Name(), ".jsonl") {
+				return nil
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			// Each file is usually one session, track CWD within the file
+			var currentCWD string
+			sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+
+				var entry CodexLog
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					continue
+				}
+
+				// 1. Update CWD if meta info is present
+				if entry.SessionMeta != nil && entry.SessionMeta.Payload.CWD != "" {
+					currentCWD = entry.SessionMeta.Payload.CWD
+				} else if entry.CWD != "" {
+					currentCWD = entry.CWD
+				}
+
+				// 2. Extract user message text
+				var rawText string
+				if entry.EventMsg != nil && (entry.EventMsg.Payload.Type == "user_message" || entry.EventMsg.Payload.Type == "user") {
+					rawText = entry.EventMsg.Payload.Message
+				} else if entry.ResponseItem != nil && (entry.ResponseItem.Payload.Role == "user" || entry.ResponseItem.Payload.Role == "human") {
+					rawText = entry.ResponseItem.Payload.Content
+				} else if entry.Type == "user" || entry.Type == "user_message" {
+					rawText = entry.Message
+				}
+
+				if rawText == "" {
+					continue
+				}
+
+				// 3. Filter by CWD
+				if !flexiblePathMatches(currentCWD, evalRoot) {
+					continue
+				}
+
+				timestamp := parseFlexibleTimestamp(entry.Timestamp)
+				if timestamp.IsZero() {
+					timestamp = time.Now()
+				}
+
+				text := truncateText(rawText, 100)
+				if text == "" {
+					continue
+				}
+
+				currentSessionID := entry.SessionID
+				if currentSessionID == "" {
+					currentSessionID = sessionID
+				}
+
+				request := model.LinkedRequest{
+					ID:        fmt.Sprintf("%s_%d", currentSessionID, timestamp.UnixNano()),
+					Provider:  "codex",
+					SessionID: currentSessionID,
+					Text:      text,
+					Timestamp: timestamp,
+				}
+
+				requests = append(requests, request)
+			}
 			return nil
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-
-		// Each file is usually one session, track CWD within the file
-		var currentCWD string
-		sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-
-			var entry CodexLog
-			if err := json.Unmarshal([]byte(line), &entry); err != nil {
-				continue
-			}
-
-			// 1. Update CWD if meta info is present
-			if entry.SessionMeta != nil && entry.SessionMeta.Payload.CWD != "" {
-				currentCWD = entry.SessionMeta.Payload.CWD
-			} else if entry.CWD != "" {
-				currentCWD = entry.CWD
-			}
-
-			// 2. Extract user message text
-			var rawText string
-			if entry.EventMsg != nil && (entry.EventMsg.Payload.Type == "user_message" || entry.EventMsg.Payload.Type == "user") {
-				rawText = entry.EventMsg.Payload.Message
-			} else if entry.ResponseItem != nil && (entry.ResponseItem.Payload.Role == "user" || entry.ResponseItem.Payload.Role == "human") {
-				rawText = entry.ResponseItem.Payload.Content
-			} else if entry.Type == "user" || entry.Type == "user_message" {
-				rawText = entry.Message
-			}
-
-			if rawText == "" {
-				continue
-			}
-
-			// 3. Filter by CWD (Case-insensitive for better compatibility)
-			if !flexiblePathMatches(currentCWD, evalRoot) {
-				continue
-			}
-
-			timestamp := parseFlexibleTimestamp(entry.Timestamp)
-			if timestamp.IsZero() {
-				timestamp = time.Now()
-			}
-
-			text := truncateText(rawText, 100)
-			if text == "" {
-				continue
-			}
-
-			currentSessionID := entry.SessionID
-			if currentSessionID == "" {
-				currentSessionID = sessionID
-			}
-
-			request := model.LinkedRequest{
-				ID:        fmt.Sprintf("%s_%d", currentSessionID, timestamp.UnixNano()),
-				Provider:  "codex",
-				SessionID: currentSessionID,
-				Text:      text,
-				Timestamp: timestamp,
-			}
-
-			requests = append(requests, request)
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to walk Codex logs: %w", err)
+		})
 	}
 
 	return requests, nil
