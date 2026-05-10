@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ type CodexLog struct {
 	EventMsg     *CodexEventMsg     `json:"event_msg"`
 	ResponseItem *CodexResponseItem `json:"response_item"`
 	SessionMeta  *CodexSessionMeta  `json:"session_meta"`
-	Timestamp    string             `json:"timestamp"`
+	Timestamp    interface{}        `json:"timestamp"` // Can be string or int64
 	SessionID    string             `json:"sessionId"`
 	// Legacy or flat fields
 	Type    string `json:"type"`
@@ -57,6 +58,13 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 		return nil, nil // No Codex logs yet
 	}
 
+	// Normalize gitRoot for comparison
+	evalRoot, err := filepath.EvalSymlinks(gitRoot)
+	if err != nil {
+		evalRoot = gitRoot
+	}
+	evalRoot = filepath.Clean(evalRoot)
+
 	var requests []model.LinkedRequest
 
 	// Recursively read all JSONL files in the directory
@@ -75,6 +83,7 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 
 		// Each file is usually one session, track CWD within the file
 		var currentCWD string
+		sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
@@ -96,11 +105,11 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 
 			// 2. Extract user message text
 			var rawText string
-			if entry.EventMsg != nil && entry.EventMsg.Payload.Type == "user_message" {
+			if entry.EventMsg != nil && (entry.EventMsg.Payload.Type == "user_message" || entry.EventMsg.Payload.Type == "user") {
 				rawText = entry.EventMsg.Payload.Message
-			} else if entry.ResponseItem != nil && entry.ResponseItem.Payload.Role == "user" {
+			} else if entry.ResponseItem != nil && (entry.ResponseItem.Payload.Role == "user" || entry.ResponseItem.Payload.Role == "human") {
 				rawText = entry.ResponseItem.Payload.Content
-			} else if entry.Type == "user" {
+			} else if entry.Type == "user" || entry.Type == "user_message" {
 				rawText = entry.Message
 			}
 
@@ -108,13 +117,13 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				continue
 			}
 
-			// 3. Filter by CWD
-			if !pathMatches(currentCWD, gitRoot) {
+			// 3. Filter by CWD (Case-insensitive for better compatibility)
+			if !flexiblePathMatches(currentCWD, evalRoot) {
 				continue
 			}
 
-			timestamp, err := parseTimestamp(entry.Timestamp)
-			if err != nil {
+			timestamp := parseFlexibleTimestamp(entry.Timestamp)
+			if timestamp.IsZero() {
 				timestamp = time.Now()
 			}
 
@@ -123,10 +132,15 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				continue
 			}
 
+			currentSessionID := entry.SessionID
+			if currentSessionID == "" {
+				currentSessionID = sessionID
+			}
+
 			request := model.LinkedRequest{
-				ID:        entry.SessionID + "_" + entry.Timestamp,
+				ID:        fmt.Sprintf("%s_%d", currentSessionID, timestamp.UnixNano()),
 				Provider:  "codex",
-				SessionID: entry.SessionID,
+				SessionID: currentSessionID,
 				Text:      text,
 				Timestamp: timestamp,
 			}
@@ -141,4 +155,52 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 	}
 
 	return requests, nil
+}
+
+func flexiblePathMatches(logPath, gitRoot string) bool {
+	if logPath == "" {
+		return true // If unknown, include it to be safe
+	}
+	
+	cleanLog := filepath.Clean(logPath)
+	// Try symlink evaluation for log path as well
+	evalLog, err := filepath.EvalSymlinks(cleanLog)
+	if err != nil {
+		evalLog = cleanLog
+	}
+
+	// Check if one is a prefix of another (repo root or subdirs)
+	return strings.HasPrefix(strings.ToLower(gitRoot), strings.ToLower(evalLog)) || 
+	       strings.HasPrefix(strings.ToLower(evalLog), strings.ToLower(gitRoot))
+}
+
+func parseFlexibleTimestamp(ts interface{}) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+
+	switch v := ts.(type) {
+	case string:
+		// Try ISO formats
+		if t, err := parseTimestamp(v); err == nil {
+			return t
+		}
+		// Try if it's a numeric string
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return parseUnix(i)
+		}
+	case float64:
+		return parseUnix(int64(v))
+	case int64:
+		return parseUnix(v)
+	}
+
+	return time.Time{}
+}
+
+func parseUnix(v int64) time.Time {
+	if v > 1000000000000 { // Milliseconds
+		return time.Unix(v/1000, (v%1000)*1000000).UTC()
+	}
+	return time.Unix(v, 0).UTC()
 }
