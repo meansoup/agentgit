@@ -14,35 +14,27 @@ import (
 
 // CodexLog represents a Codex log entry with potential nested structures
 type CodexLog struct {
-	EventMsg     *CodexEventMsg     `json:"event_msg"`
-	ResponseItem *CodexResponseItem `json:"response_item"`
-	SessionMeta  *CodexSessionMeta  `json:"session_meta"`
-	Timestamp    interface{}        `json:"timestamp"` // Can be string or int64
-	SessionID    string             `json:"sessionId"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
+	Timestamp interface{}     `json:"timestamp"` // Can be string or int64
+	SessionID string          `json:"sessionId"`
 	// Legacy or flat fields
-	Type    string `json:"type"`
 	CWD     string `json:"cwd"`
 	Message string `json:"message"`
 }
 
-type CodexEventMsg struct {
-	Payload struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"payload"`
+type CodexEventPayload struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
-type CodexResponseItem struct {
-	Payload struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"payload"`
+type CodexResponsePayload struct {
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"` // Can be string or []map[string]interface{}
 }
 
-type CodexSessionMeta struct {
-	Payload struct {
-		CWD string `json:"cwd"`
-	} `json:"payload"`
+type CodexSessionMetaPayload struct {
+	CWD string `json:"cwd"`
 }
 
 // LoadCodexRequests loads user requests from Codex logs
@@ -102,21 +94,38 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 					continue
 				}
 
-				// 1. Update CWD if meta info is present
-				if entry.SessionMeta != nil && entry.SessionMeta.Payload.CWD != "" {
-					currentCWD = entry.SessionMeta.Payload.CWD
-				} else if entry.CWD != "" {
-					currentCWD = entry.CWD
+				var rawText string
+				// 1. Process based on Type
+				switch entry.Type {
+				case "session_meta":
+					var p CodexSessionMetaPayload
+					if err := json.Unmarshal(entry.Payload, &p); err == nil && p.CWD != "" {
+						currentCWD = p.CWD
+					}
+				case "event_msg":
+					var p CodexEventPayload
+					if err := json.Unmarshal(entry.Payload, &p); err == nil {
+						if p.Type == "user_message" || p.Type == "user" {
+							rawText = p.Message
+						}
+					}
+				case "response_item":
+					var p CodexResponsePayload
+					if err := json.Unmarshal(entry.Payload, &p); err == nil {
+						if p.Role == "user" || p.Role == "human" {
+							rawText = extractCodexText(p.Content)
+						}
+					}
+				default:
+					// Legacy or flat fields
+					if entry.Type == "user" || entry.Type == "user_message" {
+						rawText = entry.Message
+					}
 				}
 
-				// 2. Extract user message text
-				var rawText string
-				if entry.EventMsg != nil && (entry.EventMsg.Payload.Type == "user_message" || entry.EventMsg.Payload.Type == "user") {
-					rawText = entry.EventMsg.Payload.Message
-				} else if entry.ResponseItem != nil && (entry.ResponseItem.Payload.Role == "user" || entry.ResponseItem.Payload.Role == "human") {
-					rawText = entry.ResponseItem.Payload.Content
-				} else if entry.Type == "user" || entry.Type == "user_message" {
-					rawText = entry.Message
+				// 2. Update CWD from top-level if present (legacy or redundancy)
+				if entry.CWD != "" {
+					currentCWD = entry.CWD
 				}
 
 				if rawText == "" {
@@ -158,6 +167,24 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 	}
 
 	return requests, nil
+}
+
+func extractCodexText(content interface{}) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []interface{}:
+		var sb strings.Builder
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				if text, ok := m["text"].(string); ok {
+					sb.WriteString(text)
+				}
+			}
+		}
+		return sb.String()
+	}
+	return ""
 }
 
 func flexiblePathMatches(logPath, gitRoot string) bool {
