@@ -105,3 +105,16 @@ func (d *Diff) ScrollUp() {
 func (d *Diff) ScrollDown() {
 	d.scroll++
 }
+
+// PageUp scrolls up by a page
+func (d *Diff) PageUp() {
+	d.scroll -= 20
+	if d.scroll < 0 {
+		d.scroll = 0
+	}
+}
+
+// PageDown scrolls down by a page
+func (d *Diff) PageDown() {
+	d.scroll += 20
+}

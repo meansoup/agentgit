@@ -56,10 +56,6 @@ func LoadGeminiRequests(gitRoot string) ([]model.LinkedRequest, error) {
 
 	var requests []model.LinkedRequest
 	for _, log := range logs {
-		if log.Type != "user" {
-			continue
-		}
-
 		timestamp, err := parseTimestamp(log.Timestamp)
 		if err != nil {
 			timestamp = time.Now()
@@ -74,6 +70,7 @@ func LoadGeminiRequests(gitRoot string) ([]model.LinkedRequest, error) {
 		request := model.LinkedRequest{
 			ID:        log.SessionID + "_" + log.Timestamp,
 			Provider:  "gemini",
+			IsUser:    log.Type == "user",
 			SessionID: log.SessionID,
 			Text:      text,
 			Timestamp: timestamp,

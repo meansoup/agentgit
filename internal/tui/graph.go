@@ -30,6 +30,9 @@ func (g *Graph) View(width, height int) string {
 		
 		// Render each linked request
 		for _, req := range cs.Requests {
+			if !g.app.showAllRequests && !req.IsUser {
+				continue
+			}
 			reqLine := g.renderRequest(req, i == g.app.selectedIdx, width)
 			allLines = append(allLines, reqLine)
 		}
@@ -56,7 +59,13 @@ func (g *Graph) View(width, height int) string {
 	} else {
 		// If selected item's BOTTOM is below current view
 		// Calculate the line index of the changeset itself
-		selectedBottom := selectedTop + len(g.app.changeSets[g.app.selectedIdx].Requests)
+		numVisibleRequests := 0
+		for _, req := range g.app.changeSets[g.app.selectedIdx].Requests {
+			if g.app.showAllRequests || req.IsUser {
+				numVisibleRequests++
+			}
+		}
+		selectedBottom := selectedTop + numVisibleRequests
 		if selectedBottom >= g.scrollOffset+height {
 			g.scrollOffset = selectedBottom - height + 1
 		}

@@ -95,6 +95,7 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				}
 
 				var rawText string
+				var isUser bool
 				// 1. Process based on Type
 				switch entry.Type {
 				case "session_meta":
@@ -105,22 +106,19 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				case "event_msg":
 					var p CodexEventPayload
 					if err := json.Unmarshal(entry.Payload, &p); err == nil {
-						if p.Type == "user_message" || p.Type == "user" {
-							rawText = p.Message
-						}
+						rawText = p.Message
+						isUser = (p.Type == "user_message" || p.Type == "user")
 					}
 				case "response_item":
 					var p CodexResponsePayload
 					if err := json.Unmarshal(entry.Payload, &p); err == nil {
-						if p.Role == "user" || p.Role == "human" {
-							rawText = extractCodexText(p.Content)
-						}
+						rawText = extractCodexText(p.Content)
+						isUser = (p.Role == "user" || p.Role == "human")
 					}
 				default:
 					// Legacy or flat fields
-					if entry.Type == "user" || entry.Type == "user_message" {
-						rawText = entry.Message
-					}
+					rawText = entry.Message
+					isUser = (entry.Type == "user" || entry.Type == "user_message")
 				}
 
 				// 2. Update CWD from top-level if present (legacy or redundancy)
@@ -155,6 +153,7 @@ func LoadCodexRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				request := model.LinkedRequest{
 					ID:        fmt.Sprintf("%s_%d", currentSessionID, timestamp.UnixNano()),
 					Provider:  "codex",
+					IsUser:    isUser,
 					SessionID: currentSessionID,
 					Text:      text,
 					Timestamp: timestamp,

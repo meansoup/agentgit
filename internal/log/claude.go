@@ -91,11 +91,6 @@ func LoadClaudeRequests(gitRoot string) ([]model.LinkedRequest, error) {
 				continue
 			}
 
-			// Filter: only user messages in matching cwd
-			if entry.Type != "user" {
-				continue
-			}
-
 			if !pathMatches(entry.CWD, gitRoot) {
 				continue
 			}
@@ -114,6 +109,7 @@ func LoadClaudeRequests(gitRoot string) ([]model.LinkedRequest, error) {
 			request := model.LinkedRequest{
 				ID:        entry.SessionID + "_" + entry.Timestamp, // Make ID more unique
 				Provider:  "claude",
+				IsUser:    entry.Type == "user",
 				SessionID: entry.SessionID,
 				Text:      text,
 				Timestamp: timestamp,

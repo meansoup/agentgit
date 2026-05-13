@@ -19,6 +19,7 @@ type ChangeSet struct {
 type LinkedRequest struct {
 	ID        string
 	Provider  string // "claude" | "gemini" | "codex"
+	IsUser    bool
 	SessionID string
 	Text      string
 	Timestamp time.Time

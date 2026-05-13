@@ -19,11 +19,12 @@ const (
 )
 
 type App struct {
-	screen       int
-	gitRoot      string
-	changeSets   []model.ChangeSet
-	selectedIdx  int
-	selectedFile int
+	screen          int
+	gitRoot         string
+	changeSets      []model.ChangeSet
+	selectedIdx     int
+	selectedFile    int
+	showAllRequests bool
 
 	// Sub-models
 	graph *Graph
@@ -46,9 +47,10 @@ func NewApp(gitRoot string) (*App, error) {
 	}
 
 	app := &App{
-		screen:     screenGraph,
-		gitRoot:    gitRoot,
-		changeSets: changeSets,
+		screen:          screenGraph,
+		gitRoot:         gitRoot,
+		changeSets:      changeSets,
+		showAllRequests: true,
 	}
 
 	app.graph = NewGraph(app)
@@ -72,6 +74,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		case "r":
 			return a.refresh()
+		case "u":
+			a.showAllRequests = !a.showAllRequests
+			return a, nil
 		}
 
 		switch a.screen {
@@ -119,7 +124,12 @@ func (a *App) View() string {
 	}
 
 	headerLeft := titleStyle.Render(" AgentGit ")
-	headerCenter := dimStyle.Render(fmt.Sprintf(" | %s | ready ", a.gitRoot))
+	
+	filterStatus := " All Logs "
+	if !a.showAllRequests {
+		filterStatus = " User Only "
+	}
+	headerCenter := dimStyle.Render(fmt.Sprintf(" | %s | %s ", a.gitRoot, filterStatus))
 	headerRight := titleStyle.Render(fmt.Sprintf(" %s ", screenName))
 	
 	header = lipgloss.JoinHorizontal(lipgloss.Top, headerLeft, headerCenter, headerRight)
@@ -136,9 +146,9 @@ func (a *App) View() string {
 	}
 
 	// Footer
-	footerText := " up/down move | enter/right open | esc/left back | r refresh | q quit "
+	footerText := " ↑/↓ move | pgup/pgdn | enter/right open | esc/left back | r refresh | u toggle filter | q quit "
 	if a.screen == screenDiff {
-		footerText = " up/down scroll | esc/left back | q quit "
+		footerText = " ↑/↓ scroll | pgup/pgdn | esc/left back | q quit "
 	}
 	footer = safeRepeat("─", a.width) + "\n" + dimStyle.Render(footerText)
 
@@ -174,6 +184,16 @@ func (a *App) handleGraphInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.selectedIdx < len(a.changeSets)-1 {
 			a.selectedIdx++
 		}
+	case "pgup":
+		a.selectedIdx -= 10
+		if a.selectedIdx < 0 {
+			a.selectedIdx = 0
+		}
+	case "pgdown":
+		a.selectedIdx += 10
+		if a.selectedIdx >= len(a.changeSets) {
+			a.selectedIdx = len(a.changeSets) - 1
+		}
 	case "enter", "right":
 		if a.selectedIdx < len(a.changeSets) && (a.changeSets[a.selectedIdx].Type == "commit" || a.changeSets[a.selectedIdx].FileCount > 0) {
 			a.screen = screenFiles
@@ -201,6 +221,16 @@ func (a *App) handleFilesInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.selectedFile < len(files)-1 {
 			a.selectedFile++
 		}
+	case "pgup":
+		a.selectedFile -= 5
+		if a.selectedFile < 0 {
+			a.selectedFile = 0
+		}
+	case "pgdown":
+		a.selectedFile += 5
+		if a.selectedFile >= len(files) {
+			a.selectedFile = len(files) - 1
+		}
 	case "enter", "right":
 		if a.selectedFile < len(files) {
 			a.screen = screenDiff
@@ -215,6 +245,10 @@ func (a *App) handleDiffInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.diff.ScrollUp()
 	case "down":
 		a.diff.ScrollDown()
+	case "pgup":
+		a.diff.PageUp()
+	case "pgdown":
+		a.diff.PageDown()
 	}
 	return a, nil
 }
