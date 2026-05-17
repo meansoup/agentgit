@@ -10,6 +10,45 @@ import (
 	"github.com/minkuik/agentgit/internal/model"
 )
 
+// LinkCommitsOnly creates changesets from commits without linking requests (for fast initial load)
+func LinkCommitsOnly(gitRoot string, commitCount int) ([]model.ChangeSet, error) {
+	commits, err := git.LoadCommits(commitCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load commits: %w", err)
+	}
+
+	var changeSets []model.ChangeSet
+	for _, commit := range commits {
+		additions, deletions, _ := git.GetCommitChanges(commit.Hash)
+		fileCount := countFilesInCommit(commit.Hash)
+
+		changeSets = append(changeSets, model.ChangeSet{
+			ID:         commit.Hash[:8],
+			Type:       "commit",
+			Title:      commit.Title,
+			CommitHash: commit.Hash,
+			Author:     commit.Author,
+			Timestamp:  commit.Timestamp,
+			Summary:    fmt.Sprintf("%d files: +%d -%d", fileCount, additions, deletions),
+			FileCount:  fileCount,
+			Requests:   nil,
+		})
+	}
+
+	wtFiles, _ := git.WorkingTreeFiles()
+	if len(wtFiles) > 0 {
+		changeSets = append([]model.ChangeSet{{
+			ID:        "working-tree",
+			Type:      "uncommitted",
+			Title:     "Working Tree Changes",
+			Timestamp: time.Now().UTC(),
+			FileCount: len(wtFiles),
+		}}, changeSets...)
+	}
+
+	return changeSets, nil
+}
+
 // LinkRequestsToChangesets links user requests to git commits and working tree
 func LinkRequestsToChangesets(gitRoot string, commitCount int) ([]model.ChangeSet, error) {
 	// Load commits

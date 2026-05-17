@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,6 +27,8 @@ type App struct {
 	selectedIdx     int
 	selectedFile    int
 	showAllRequests bool
+	isLoading       bool
+	status          string
 
 	// Sub-models
 	graph *Graph
@@ -35,22 +39,25 @@ type App struct {
 	height int
 }
 
+type (
+	initialCommitsMsg []model.ChangeSet
+	fullChangeSetsMsg []model.ChangeSet
+	errMsg            error
+)
+
 // NewApp creates a new TUI app
 func NewApp(gitRoot string) (*App, error) {
 	if !git.IsGitRepository() {
 		return nil, fmt.Errorf("not a git repository")
 	}
 
-	changeSets, err := linker.LinkRequestsToChangesets(gitRoot, 50)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load changesets: %w", err)
-	}
-
 	app := &App{
 		screen:          screenGraph,
 		gitRoot:         gitRoot,
-		changeSets:      changeSets,
+		changeSets:      nil, // Start empty
 		showAllRequests: true,
+		isLoading:       true,
+		status:          "Loading commits...",
 	}
 
 	app.graph = NewGraph(app)
@@ -62,12 +69,45 @@ func NewApp(gitRoot string) (*App, error) {
 
 // Init initializes the app
 func (a *App) Init() tea.Cmd {
-	return nil
+	return tea.Batch(
+		func() tea.Msg {
+			cs, err := linker.LinkCommitsOnly(a.gitRoot, 50)
+			if err != nil {
+				return errMsg(err)
+			}
+			return initialCommitsMsg(cs)
+		},
+		func() tea.Msg {
+			cs, err := linker.LinkRequestsToChangesets(a.gitRoot, 50)
+			if err != nil {
+				return errMsg(err)
+			}
+			return fullChangeSetsMsg(cs)
+		},
+	)
 }
 
 // Update handles input
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case initialCommitsMsg:
+		if a.changeSets == nil {
+			a.changeSets = msg
+		}
+		a.status = "Loading requests..."
+		return a, nil
+
+	case fullChangeSetsMsg:
+		a.changeSets = msg
+		a.isLoading = false
+		a.status = "Ready"
+		return a, nil
+
+	case errMsg:
+		a.status = fmt.Sprintf("Error: %v", msg)
+		a.isLoading = false
+		return a, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -77,6 +117,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "u":
 			a.showAllRequests = !a.showAllRequests
 			return a, nil
+		}
+
+		if a.isLoading && a.changeSets == nil {
+			return a, nil // Ignore other input while initial load
 		}
 
 		switch a.screen {
@@ -129,7 +173,7 @@ func (a *App) View() string {
 	if !a.showAllRequests {
 		filterStatus = " User Only "
 	}
-	headerCenter := dimStyle.Render(fmt.Sprintf(" | %s | %s ", a.gitRoot, filterStatus))
+	headerCenter := dimStyle.Render(fmt.Sprintf(" | %s | %s | %s ", a.gitRoot, filterStatus, a.status))
 	headerRight := titleStyle.Render(fmt.Sprintf(" %s ", screenName))
 	
 	header = lipgloss.JoinHorizontal(lipgloss.Top, headerLeft, headerCenter, headerRight)
@@ -146,9 +190,9 @@ func (a *App) View() string {
 	}
 
 	// Footer
-	footerText := " ↑/↓ move | pgup/pgdn | enter/right open | esc/left back | r refresh | u toggle filter | q quit "
+	footerText := " ↑/↓ move | pgup/pgdn | enter/right open | e edit | esc/left back | r refresh | u toggle filter | q quit "
 	if a.screen == screenDiff {
-		footerText = " ↑/↓ scroll | pgup/pgdn | esc/left back | q quit "
+		footerText = " ↑/↓ scroll | pgup/pgdn | e edit | esc/left back | q quit "
 	}
 	footer = safeRepeat("─", a.width) + "\n" + dimStyle.Render(footerText)
 
@@ -231,6 +275,14 @@ func (a *App) handleFilesInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.selectedFile >= len(files) {
 			a.selectedFile = len(files) - 1
 		}
+	case "e":
+		if a.selectedFile < len(files) {
+			fullPath := filepath.Join(a.gitRoot, files[a.selectedFile].Path)
+			c := exec.Command("vi", fullPath)
+			return a, tea.ExecProcess(c, func(err error) tea.Msg {
+				return a.refreshCmd()
+			})
+		}
 	case "enter", "right":
 		if a.selectedFile < len(files) {
 			a.screen = screenDiff
@@ -249,16 +301,39 @@ func (a *App) handleDiffInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.diff.PageUp()
 	case "pgdown":
 		a.diff.PageDown()
+	case "e":
+		cs := a.changeSets[a.selectedIdx]
+		var files []model.ChangedFile
+		if cs.Type == "commit" {
+			files, _ = git.CommitFiles(cs.CommitHash)
+		} else {
+			files, _ = git.WorkingTreeFiles()
+		}
+		if a.selectedFile < len(files) {
+			fullPath := filepath.Join(a.gitRoot, files[a.selectedFile].Path)
+			c := exec.Command("vi", fullPath)
+			return a, tea.ExecProcess(c, func(err error) tea.Msg {
+				return a.refreshCmd()
+			})
+		}
 	}
 	return a, nil
 }
 
 func (a *App) refresh() (tea.Model, tea.Cmd) {
-	changeSets, err := linker.LinkRequestsToChangesets(a.gitRoot, 50)
-	if err == nil {
-		a.changeSets = changeSets
+	a.isLoading = true
+	a.status = "Refreshing..."
+	return a, a.refreshCmd()
+}
+
+func (a *App) refreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		cs, err := linker.LinkRequestsToChangesets(a.gitRoot, 50)
+		if err != nil {
+			return errMsg(err)
+		}
+		return fullChangeSetsMsg(cs)
 	}
-	return a, nil
 }
 
 // Styles

@@ -21,6 +21,9 @@ func NewFiles(app *App) *Files {
 
 // View renders the files screen with a preview
 func (f *Files) View(width, height int) string {
+	if f.app.changeSets == nil || f.app.selectedIdx >= len(f.app.changeSets) {
+		return " Loading..."
+	}
 	cs := f.app.changeSets[f.app.selectedIdx]
 	var files []model.ChangedFile
 	if cs.Type == "commit" {

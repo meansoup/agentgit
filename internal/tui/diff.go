@@ -22,6 +22,9 @@ func NewDiff(app *App) *Diff {
 
 // View renders the diff screen
 func (d *Diff) View(width, height int) string {
+	if d.app.changeSets == nil || d.app.selectedIdx >= len(d.app.changeSets) {
+		return " Loading..."
+	}
 	var lines []string
 
 	cs := d.app.changeSets[d.app.selectedIdx]

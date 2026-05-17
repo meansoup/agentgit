@@ -19,6 +19,9 @@ func NewGraph(app *App) *Graph {
 
 // View renders the graph screen
 func (g *Graph) View(width, height int) string {
+	if g.app.changeSets == nil {
+		return "\n  Loading..."
+	}
 	var allLines []string
 	
 	// Track the starting line index of each changeset
