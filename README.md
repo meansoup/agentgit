@@ -20,7 +20,7 @@ export PATH="/path/to/agentgit/bin:$PATH"
 ## Setup once per PC
 
 ```sh
-agentgit setup-global
+agentgit setup
 ```
 
 This initializes the database and configures Git's global `core.hooksPath` to
@@ -31,7 +31,7 @@ and calls its `post-commit` hook after recording its own data.
 ## Setup in one Git repository
 
 ```sh
-agentgit setup
+agentgit setup-local
 ```
 
 Use this only when you want repository-local setup instead of PC-wide setup. It

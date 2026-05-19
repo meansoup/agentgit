@@ -26,11 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentgit")
     sub = parser.add_subparsers(required=True)
 
-    setup = sub.add_parser("setup", help="install hooks and initialize the local database")
+    setup = sub.add_parser("setup", help="install global hooks once for this PC")
     setup.set_defaults(func=cmd_setup)
 
-    setup_global = sub.add_parser("setup-global", help="install global hooks once for this PC")
-    setup_global.set_defaults(func=cmd_setup_global)
+    setup_local = sub.add_parser("setup-local", help="install hooks only in the current repository")
+    setup_local.set_defaults(func=cmd_setup_local)
 
     log = sub.add_parser("log", help="browse commits with linked AI requests")
     log.add_argument("--limit", type=int, default=500)
@@ -74,20 +74,20 @@ def add_request_subcommands(parser: argparse.ArgumentParser, provider: str | Non
 
 
 def cmd_setup(_args: argparse.Namespace) -> int:
-    root = repo_root()
-    db_path = db.init_db()
-    hook = hooks.install_post_commit_hook(root)
-    print(f"initialized db: {db_path}")
-    print(f"installed hook: {hook}")
-    return 0
-
-
-def cmd_setup_global(_args: argparse.Namespace) -> int:
     db_path = db.init_db()
     hook = hooks.install_global_hooks()
     print(f"initialized db: {db_path}")
     print(f"installed global hook: {hook}")
     print(f"configured: git config --global core.hooksPath {hook.parent}")
+    return 0
+
+
+def cmd_setup_local(_args: argparse.Namespace) -> int:
+    root = repo_root()
+    db_path = db.init_db()
+    hook = hooks.install_post_commit_hook(root)
+    print(f"initialized db: {db_path}")
+    print(f"installed hook: {hook}")
     return 0
 
 
