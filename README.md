@@ -1,5 +1,9 @@
 # agentgit
 
+한국어 문서: [README.ko.md](./README.ko.md)
+
+Keep this file in sync with `README.ko.md`.
+
 `agentgit` records AI-agent requests in a local SQLite database, links them to
 Git commits through hooks, and provides a TUI for browsing commits, files, and
 diffs.
