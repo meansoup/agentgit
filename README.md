@@ -10,6 +10,13 @@ diffs.
 python3 -m pip install -e .
 ```
 
+If editable install is not available, add this checkout's `bin` directory to
+`PATH`:
+
+```sh
+export PATH="/path/to/agentgit/bin:$PATH"
+```
+
 ## Setup in any Git repository
 
 ```sh
