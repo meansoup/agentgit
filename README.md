@@ -4,34 +4,133 @@
 Git commits through hooks, and provides a TUI for browsing commits, files, and
 diffs.
 
-## Build
-
-Build a local binary:
+## Quick Start
 
 ```sh
-go build -o dist/agentgit ./cmd/agentgit
+# Install the release binary somewhere on PATH first.
+agentgit setup
+
+cd /path/to/project
+agentgit codex start --model gpt-5 --message "implement login validation"
+# Run Codex and edit files.
+agentgit codex commit -m "Implement login validation"
+agentgit codex finish
+
+agentgit log
 ```
 
-Build release binaries for macOS and Ubuntu/Linux:
+`agentgit setup` is a one-time setup per PC. It initializes the local database
+and installs a global Git `post-commit` hook, so the same setup works in any Git
+repository on the machine.
+
+## Daily Usage
+
+### 1. Start an Agent Request
 
 ```sh
-make release
+agentgit codex start --model gpt-5 --message "describe the request"
 ```
 
-Release artifacts are created in `dist/`:
-
-- `agentgit_<version>_darwin_amd64`
-- `agentgit_<version>_darwin_arm64`
-- `agentgit_<version>_linux_amd64`
-- `agentgit_<version>_linux_arm64`
-
-## Run for development
+The same request flow is available for Claude and Gemini:
 
 ```sh
-go run ./cmd/agentgit --help
+agentgit claude start --model claude-sonnet-4.5 --message "describe the request"
+agentgit gemini start --model gemini-2.5-pro --message "describe the request"
 ```
 
-## Install for use
+`start` snapshots files that were already dirty before the request. Those files
+are excluded from the request commit by default.
+
+If the AI request already changed files before you called `start`, use:
+
+```sh
+agentgit codex start --model gpt-5 --message "describe the request" --include-current
+```
+
+### 2. Commit Only Request-Owned Changes
+
+After the agent changes code:
+
+```sh
+agentgit codex commit -m "Implement requested change"
+```
+
+This stages and commits only files that became dirty after `start`. The Git hook
+links the new commit to the active request in the local SQLite database.
+
+Use the matching provider command for other agents:
+
+```sh
+agentgit claude commit -m "Implement requested change"
+agentgit gemini commit -m "Implement requested change"
+```
+
+### 3. Finish the Request
+
+```sh
+agentgit codex finish
+```
+
+Provider-specific variants are also available:
+
+```sh
+agentgit claude finish
+agentgit gemini finish
+```
+
+### 4. Browse Request-Linked Commits
+
+```sh
+agentgit log
+```
+
+Useful option:
+
+```sh
+agentgit log --limit 100
+```
+
+TUI keys:
+
+- `Up` / `Down` or `k` / `j`: move cursor
+- `Right` / `Enter` or `l`: commit -> files -> diff
+- `Left` / `Backspace` or `h`: diff -> files -> commits
+- `m`: toggle unified and split diff views
+- `q`: quit
+
+In non-TTY environments, `agentgit log` prints a static colorized view instead
+of opening the TUI.
+
+## Commands
+
+```sh
+agentgit setup
+agentgit setup-local
+agentgit log --limit 500
+agentgit version
+
+agentgit codex start --model <model> --message <message>
+agentgit codex commit -m <commit-message>
+agentgit codex finish
+
+agentgit claude start --model <model> --message <message>
+agentgit claude commit -m <commit-message>
+agentgit claude finish
+
+agentgit gemini start --model <model> --message <message>
+agentgit gemini commit -m <commit-message>
+agentgit gemini finish
+```
+
+Generic provider form:
+
+```sh
+agentgit request --provider codex start --model gpt-5 --message "request"
+agentgit request --provider claude commit -m "commit message"
+agentgit request --provider gemini finish
+```
+
+## Install
 
 For a packaged release, install the matching binary for your OS and CPU
 architecture somewhere on `PATH`.
@@ -113,7 +212,7 @@ file.
 For local source-checkout development, `bin/agentgit` runs the Go command with
 `go run`; release users should install the compiled binary instead.
 
-## Setup once per PC
+## Setup
 
 ```sh
 agentgit setup
@@ -140,38 +239,29 @@ database. The default database is:
 
 Override it with `AGENTGIT_DB=/path/to/agentgit.sqlite3`.
 
-## Record a Codex request and commit only request changes
+## Build
+
+Build a local binary:
 
 ```sh
-agentgit codex start --model gpt-5 --message "implement request"
-agentgit codex commit -m "Implement request"
-agentgit codex finish
+go build -o dist/agentgit ./cmd/agentgit
 ```
 
-`start` snapshots the dirty files that existed before the request. `commit`
-stages and commits only files that became dirty after that snapshot, then the
-installed Git hook links the new commit to the active request.
-
-If a request is already in progress before `start` was called, use
-`--include-current` to treat existing dirty files as request-owned.
-
-The same flow is available for future providers:
+Build release binaries for macOS and Ubuntu/Linux:
 
 ```sh
-agentgit gemini start --model gemini-... --message "..."
-agentgit claude start --model claude-... --message "..."
+make release
 ```
 
-## Browse request-linked commits
+Release artifacts are created in `dist/`:
+
+- `agentgit_<version>_darwin_amd64`
+- `agentgit_<version>_darwin_arm64`
+- `agentgit_<version>_linux_amd64`
+- `agentgit_<version>_linux_arm64`
+
+Run for development:
 
 ```sh
-agentgit log
+go run ./cmd/agentgit --help
 ```
-
-Keys:
-
-- `Up` / `Down`: move cursor
-- `Right`: commit -> files -> diff
-- `Left`: diff -> files -> commits
-- `m`: toggle unified and split diff views
-- `q`: quit
