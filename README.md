@@ -4,18 +4,95 @@
 Git commits through hooks, and provides a TUI for browsing commits, files, and
 diffs.
 
+## Build
+
+Build distribution artifacts for release:
+
+```sh
+python3 -m pip install --upgrade build
+python3 -m build
+```
+
+Artifacts are created in `dist/`:
+
+- `dist/agentgit-<version>.tar.gz`
+- `dist/agentgit-<version>-py3-none-any.whl`
+
+Optional release checks:
+
+```sh
+python3 -m pip install --upgrade twine
+python3 -m twine check dist/*
+```
+
 ## Install for development
 
 ```sh
 python3 -m pip install -e .
 ```
 
-If editable install is not available, add this checkout's `bin` directory to
-`PATH`:
+## Install for use
+
+For a packaged release, prefer installing the wheel:
+
+```sh
+python3 -m pip install dist/agentgit-<version>-py3-none-any.whl
+```
+
+If you are running directly from a checkout instead of an installed package, the
+`bin/agentgit` wrapper must be on `PATH`.
+
+`export PATH=...` only affects the current shell session. It does not survive
+opening a new terminal or rebooting the PC unless you add it to a shell startup
+file.
+
+### macOS
+
+Temporary for the current shell only:
 
 ```sh
 export PATH="/path/to/agentgit/bin:$PATH"
 ```
+
+Persistent for future terminals on macOS with `zsh`:
+
+```sh
+echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+If your macOS shell is `bash` instead:
+
+```sh
+echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.bash_profile
+source ~/.bash_profile
+```
+
+### Ubuntu
+
+Temporary for the current shell only:
+
+```sh
+export PATH="/path/to/agentgit/bin:$PATH"
+```
+
+Persistent for future terminals on Ubuntu with `bash`:
+
+```sh
+echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+If your Ubuntu shell is `zsh` instead:
+
+```sh
+echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+For distribution to end users, the cleaner path is publishing a wheel and having
+users install `agentgit` with `pip`, `pipx`, Homebrew, or an OS package rather
+than relying on manual `PATH` edits from a source checkout.
 
 ## Setup once per PC
 
