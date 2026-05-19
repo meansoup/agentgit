@@ -4,94 +4,101 @@
 
 Keep this file in sync with `README.ko.md`.
 
-`agentgit` records AI-agent requests in a local SQLite database, links them to
-Git commits through hooks, and provides a TUI for browsing commits, files, and
-diffs.
+`agentgit` links AI-agent requests to Git commits without changing how you use
+the agent CLI. After setup, keep using `codex` normally. `agentgit` receives
+Codex lifecycle hook events, records requests in a local SQLite database, creates
+request-scoped commits when a request changed files, and provides a TUI for
+browsing request-linked commit history.
+
+## Commands
+
+There are two user-facing commands:
+
+```sh
+agentgit
+agentgit setup codex
+```
+
+`agentgit [path]` shows request-linked commits for the current path or a
+specified path.
+
+`agentgit setup codex` installs Codex lifecycle hooks once for this PC.
+
+Internal hook command:
+
+```sh
+agentgit hook codex
+```
+
+This command is written into Codex hook configuration and is not meant to be run
+manually.
 
 ## Quick Start
 
 ```sh
 # Install the release binary somewhere on PATH first.
-agentgit setup
+agentgit setup codex
 
 cd /path/to/project
-agentgit codex start --model gpt-5 --message "implement login validation"
-# Run Codex and edit files.
-agentgit codex commit -m "Implement login validation"
-agentgit codex finish
+codex
+# Use Codex normally. If the request changes files in a Git repository,
+# agentgit records the request and creates a request-scoped commit.
 
-agentgit log
+agentgit
 ```
 
-`agentgit setup` is a one-time setup per PC. It initializes the local database
-and installs a global Git `post-commit` hook, so the same setup works in any Git
-repository on the machine.
+Codex may ask you to review and trust the installed hook from `/hooks`. This is
+normal for non-managed Codex hooks.
 
-## Daily Usage
+## How It Works
 
-### 1. Start an Agent Request
+`agentgit setup codex` writes hook configuration to:
 
-```sh
-agentgit codex start --model gpt-5 --message "describe the request"
+```text
+~/.codex/hooks.json
 ```
 
-The same request flow is available for Claude and Gemini:
+The Codex hook flow is:
 
-```sh
-agentgit claude start --model claude-sonnet-4.5 --message "describe the request"
-agentgit gemini start --model gemini-2.5-pro --message "describe the request"
+- `UserPromptSubmit`: record the request message, agent name, model, session id,
+  turn id, current Git root, dirty-file baseline, and current `HEAD`.
+- `Stop`: compare the current working tree to the baseline, commit only files
+  changed by that request, and link the resulting commit to the recorded request.
+- If Codex or the user already created commits during the request, `agentgit`
+  links commits created after the baseline `HEAD`.
+
+The database is local and CLI-agnostic:
+
+```text
+~/.local/share/agentgit/agentgit.sqlite3
 ```
 
-`start` snapshots files that were already dirty before the request. Those files
-are excluded from the request commit by default.
-
-If the AI request already changed files before you called `start`, use:
+Override it with:
 
 ```sh
-agentgit codex start --model gpt-5 --message "describe the request" --include-current
+AGENTGIT_DB=/path/to/agentgit.sqlite3
 ```
 
-### 2. Commit Only Request-Owned Changes
+## Browse Request-Linked Commits
 
-After the agent changes code:
+Current path:
 
 ```sh
-agentgit codex commit -m "Implement requested change"
+agentgit
 ```
 
-This stages and commits only files that became dirty after `start`. The Git hook
-links the new commit to the active request in the local SQLite database.
-
-Use the matching provider command for other agents:
+Specific repository, directory, or file path:
 
 ```sh
-agentgit claude commit -m "Implement requested change"
-agentgit gemini commit -m "Implement requested change"
+agentgit /path/to/project
+agentgit /path/to/project/file.go
 ```
 
-### 3. Finish the Request
+Limit commit count:
 
 ```sh
-agentgit codex finish
-```
-
-Provider-specific variants are also available:
-
-```sh
-agentgit claude finish
-agentgit gemini finish
-```
-
-### 4. Browse Request-Linked Commits
-
-```sh
-agentgit log
-```
-
-Useful option:
-
-```sh
-agentgit log --limit 100
+agentgit --limit 100
+agentgit --limit 100 /path/to/project
 ```
 
 TUI keys:
@@ -102,37 +109,31 @@ TUI keys:
 - `m`: toggle unified and split diff views
 - `q`: quit
 
-In non-TTY environments, `agentgit log` prints a static colorized view instead
-of opening the TUI.
+In non-TTY environments, `agentgit` prints a static colorized view instead of
+opening the TUI.
 
-## Commands
+Example:
 
-```sh
-agentgit setup
-agentgit setup-local
-agentgit log --limit 500
-agentgit version
-
-agentgit codex start --model <model> --message <message>
-agentgit codex commit -m <commit-message>
-agentgit codex finish
-
-agentgit claude start --model <model> --message <message>
-agentgit claude commit -m <commit-message>
-agentgit claude finish
-
-agentgit gemini start --model <model> --message <message>
-agentgit gemini commit -m <commit-message>
-agentgit gemini finish
+```text
+7cbbb0c8 04-06 15:16  commit message
+└─ ● [codex gpt-5] request message
+12345678 04-06 15:16  another commit
 ```
 
-Generic provider form:
+## Provider Status
 
-```sh
-agentgit request --provider codex start --model gpt-5 --message "request"
-agentgit request --provider claude commit -m "commit message"
-agentgit request --provider gemini finish
-```
+Current setup support:
+
+- `agentgit setup codex`
+
+Planned setup support:
+
+- `agentgit setup claude`
+- `agentgit setup gemini`
+
+The database schema uses generic agent terms such as `agent_name`, `model`,
+`session_id`, `turn_id`, and `request_commits`, so it is not tied to Codex-only
+terminology.
 
 ## Install
 
@@ -216,33 +217,6 @@ file.
 For local source-checkout development, `bin/agentgit` runs the Go command with
 `go run`; release users should install the compiled binary instead.
 
-## Setup
-
-```sh
-agentgit setup
-```
-
-This initializes the database and configures Git's global `core.hooksPath` to
-`~/.config/agentgit/hooks`, so commits in any repository can be linked to active
-agent requests. If another global hooks path already exists, agentgit preserves
-and calls its `post-commit` hook after recording its own data.
-
-## Setup in one Git repository
-
-```sh
-agentgit setup-local
-```
-
-Use this only when you want repository-local setup instead of PC-wide setup. It
-installs a `post-commit` hook in the current repository and initializes the local
-database. The default database is:
-
-```text
-~/.local/share/agentgit/agentgit.sqlite3
-```
-
-Override it with `AGENTGIT_DB=/path/to/agentgit.sqlite3`.
-
 ## Build
 
 Build a local binary:
@@ -267,5 +241,5 @@ Release artifacts are created in `dist/`:
 Run for development:
 
 ```sh
-go run ./cmd/agentgit --help
+go run ./cmd/agentgit -- --help
 ```

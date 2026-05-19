@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -16,10 +17,14 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS agent_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider TEXT NOT NULL,
+  agent_name TEXT,
   model TEXT NOT NULL,
   message TEXT NOT NULL,
   repo_root TEXT NOT NULL,
+  session_id TEXT,
+  turn_id TEXT,
   baseline_status_json TEXT NOT NULL DEFAULT '[]',
+  baseline_head TEXT,
   started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   finished_at TEXT
 );
@@ -41,16 +46,19 @@ ON request_commits(repo_root, commit_hash);
 
 type Request struct {
 	ID            int64
-	Provider      string
+	AgentName     string
 	Model         string
 	Message       string
 	RepoRoot      string
+	SessionID     string
+	TurnID        string
 	BaselinePaths map[string]bool
+	BaselineHead  string
 }
 
 type LinkedRequest struct {
 	RequestID int64
-	Provider  string
+	AgentName string
 	Model     string
 	Message   string
 }
@@ -88,11 +96,35 @@ func Init() (string, error) {
 		return "", err
 	}
 	defer db.Close()
-	_, err = db.Exec(Schema)
+	if _, err = db.Exec(Schema); err != nil {
+		return "", err
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE agent_requests ADD COLUMN agent_name TEXT`,
+		`ALTER TABLE agent_requests ADD COLUMN session_id TEXT`,
+		`ALTER TABLE agent_requests ADD COLUMN turn_id TEXT`,
+		`ALTER TABLE agent_requests ADD COLUMN baseline_head TEXT`,
+	} {
+		if _, alterErr := db.Exec(stmt); alterErr != nil && !isDuplicateColumnError(alterErr) {
+			return "", alterErr
+		}
+	}
+	_, err = db.Exec(`
+		UPDATE agent_requests
+		SET agent_name = provider
+		WHERE agent_name IS NULL AND provider IS NOT NULL
+	`)
+	if err != nil {
+		return "", err
+	}
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_agent_requests_agent_turn
+		ON agent_requests(agent_name, session_id, turn_id)
+	`)
 	return DefaultDBPath(), err
 }
 
-func CreateRequest(provider, model, message, repoRoot string, baseline map[string]bool) (int64, error) {
+func CreateRequest(agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
 	if _, err := Init(); err != nil {
 		return 0, err
 	}
@@ -110,18 +142,31 @@ func CreateRequest(provider, model, message, repoRoot string, baseline map[strin
 		return 0, err
 	}
 	res, err := db.Exec(
-		`INSERT INTO agent_requests(provider, model, message, repo_root, baseline_status_json)
-		 VALUES (?, ?, ?, ?, ?)`,
-		provider,
+		`INSERT INTO agent_requests(provider, agent_name, model, message, repo_root, session_id, turn_id, baseline_status_json, baseline_head)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		agentName,
+		agentName,
 		model,
 		message,
 		repoRoot,
+		sessionID,
+		turnID,
 		string(raw),
+		baselineHead,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+func CreateOrUpdateRequest(agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
+	if existing, ok, err := FindRequest(agentName, sessionID, turnID); err != nil {
+		return 0, err
+	} else if ok {
+		return existing.ID, nil
+	}
+	return CreateRequest(agentName, model, message, repoRoot, sessionID, turnID, baselineHead, baseline)
 }
 
 func GetRequest(id int64) (Request, error) {
@@ -136,10 +181,10 @@ func GetRequest(id int64) (Request, error) {
 	var req Request
 	var baselineRaw string
 	err = db.QueryRow(
-		`SELECT id, provider, model, message, repo_root, baseline_status_json
+		`SELECT id, COALESCE(agent_name, provider), model, message, repo_root, COALESCE(session_id, ''), COALESCE(turn_id, ''), baseline_status_json, COALESCE(baseline_head, '')
 		 FROM agent_requests WHERE id = ?`,
 		id,
-	).Scan(&req.ID, &req.Provider, &req.Model, &req.Message, &req.RepoRoot, &baselineRaw)
+	).Scan(&req.ID, &req.AgentName, &req.Model, &req.Message, &req.RepoRoot, &req.SessionID, &req.TurnID, &baselineRaw, &req.BaselineHead)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Request{}, errors.New("request does not exist")
 	}
@@ -155,6 +200,36 @@ func GetRequest(id int64) (Request, error) {
 		req.BaselinePaths[path] = true
 	}
 	return req, nil
+}
+
+func FindRequest(agentName, sessionID, turnID string) (Request, bool, error) {
+	if _, err := Init(); err != nil {
+		return Request{}, false, err
+	}
+	db, err := Open()
+	if err != nil {
+		return Request{}, false, err
+	}
+	defer db.Close()
+	var id int64
+	err = db.QueryRow(
+		`SELECT id
+		 FROM agent_requests
+		 WHERE COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ?
+		 ORDER BY id DESC
+		 LIMIT 1`,
+		agentName,
+		sessionID,
+		turnID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Request{}, false, nil
+	}
+	if err != nil {
+		return Request{}, false, err
+	}
+	req, err := GetRequest(id)
+	return req, err == nil, err
 }
 
 func FinishRequest(id int64) error {
@@ -204,7 +279,7 @@ func RequestsByCommit(repoRoot string) (map[string][]LinkedRequest, error) {
 	}
 	defer db.Close()
 	rows, err := db.Query(
-		`SELECT rc.commit_hash, ar.id, ar.provider, ar.model, ar.message
+		`SELECT rc.commit_hash, ar.id, COALESCE(ar.agent_name, ar.provider), ar.model, ar.message
 		 FROM request_commits rc
 		 JOIN agent_requests ar ON ar.id = rc.request_id
 		 WHERE rc.repo_root = ?
@@ -219,12 +294,16 @@ func RequestsByCommit(repoRoot string) (map[string][]LinkedRequest, error) {
 	for rows.Next() {
 		var commitHash string
 		var req LinkedRequest
-		if err := rows.Scan(&commitHash, &req.RequestID, &req.Provider, &req.Model, &req.Message); err != nil {
+		if err := rows.Scan(&commitHash, &req.RequestID, &req.AgentName, &req.Model, &req.Message); err != nil {
 			return nil, err
 		}
 		result[commitHash] = append(result[commitHash], req)
 	}
 	return result, rows.Err()
+}
+
+func isDuplicateColumnError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }
 
 func homeDir() string {

@@ -4,93 +4,100 @@ English docs: [README.md](./README.md)
 
 `README.md`와 항상 같은 내용을 유지하세요.
 
-`agentgit`는 AI 에이전트 요청을 로컬 SQLite 데이터베이스에 저장하고, Git
-commit과 hook으로 연결하며, commit/file/diff를 탐색하는 TUI를 제공합니다.
+`agentgit`은 AI agent CLI 사용 방식을 바꾸지 않고 agent request와 Git commit을
+연결합니다. 설정 후에는 기존처럼 `codex`를 그대로 사용합니다. `agentgit`은 Codex
+lifecycle hook 이벤트를 받아 request를 로컬 SQLite 데이터베이스에 기록하고,
+request가 파일을 변경했다면 request 단위 commit을 만들고, request와 commit이
+연결된 Git history를 TUI로 보여줍니다.
+
+## 명령어
+
+사용자가 직접 쓰는 명령어는 두 개입니다.
+
+```sh
+agentgit
+agentgit setup codex
+```
+
+`agentgit [path]`는 현재 path 또는 지정 path에 대한 request-linked commit을
+보여줍니다.
+
+`agentgit setup codex`는 이 PC에 Codex lifecycle hook을 한 번 설치합니다.
+
+내부 hook 명령:
+
+```sh
+agentgit hook codex
+```
+
+이 명령은 Codex hook 설정에 기록되는 내부용 명령이며, 직접 실행할 필요가 없습니다.
 
 ## 빠른 시작
 
 ```sh
 # release binary를 PATH에 먼저 설치한다.
-agentgit setup
+agentgit setup codex
 
 cd /path/to/project
-agentgit codex start --model gpt-5 --message "로그인 검증 구현"
-# Codex를 실행하고 파일을 수정한다.
-agentgit codex commit -m "로그인 검증 구현"
-agentgit codex finish
+codex
+# Codex는 평소처럼 사용한다. Git repository에서 request가 파일을 변경하면
+# agentgit이 request를 기록하고 request 단위 commit을 만든다.
 
-agentgit log
+agentgit
 ```
 
-`agentgit setup`은 PC당 한 번만 하면 되는 초기 설정입니다. 로컬 데이터베이스를
-초기화하고 전역 Git `post-commit` hook을 설치하므로, 같은 머신의 어떤 Git
-repository에서도 사용할 수 있습니다.
+Codex가 `/hooks`에서 새 hook을 검토하고 trust하라고 요청할 수 있습니다. non-managed
+Codex hook에서는 정상적인 흐름입니다.
 
-## 사용 흐름
+## 동작 방식
 
-### 1. 에이전트 요청 시작
+`agentgit setup codex`는 hook 설정을 다음 위치에 씁니다.
 
-```sh
-agentgit codex start --model gpt-5 --message "요청 내용을 설명"
+```text
+~/.codex/hooks.json
 ```
 
-Claude와 Gemini도 같은 흐름을 사용합니다.
+Codex hook 흐름:
 
-```sh
-agentgit claude start --model claude-sonnet-4.5 --message "요청 내용을 설명"
-agentgit gemini start --model gemini-2.5-pro --message "요청 내용을 설명"
+- `UserPromptSubmit`: request message, agent name, model, session id, turn id,
+  현재 Git root, dirty-file baseline, 현재 `HEAD`를 기록합니다.
+- `Stop`: 현재 working tree를 baseline과 비교해서 해당 request가 변경한 파일만
+  commit하고, 생성된 commit을 기록된 request에 연결합니다.
+- Codex 또는 사용자가 request 중 이미 commit을 만들었다면, baseline `HEAD` 이후에
+  생성된 commit을 request에 연결합니다.
+
+데이터베이스는 로컬이며 특정 CLI에 종속되지 않는 용어를 사용합니다.
+
+```text
+~/.local/share/agentgit/agentgit.sqlite3
 ```
 
-`start`는 요청 전에 이미 변경되어 있던 파일을 snapshot으로 저장합니다. 이 파일들은
-기본적으로 요청 commit에서 제외됩니다.
-
-만약 AI 요청이 `start` 전에 이미 파일을 바꿨다면 다음 옵션을 사용합니다.
+환경 변수로 덮어쓸 수 있습니다.
 
 ```sh
-agentgit codex start --model gpt-5 --message "요청 내용을 설명" --include-current
+AGENTGIT_DB=/path/to/agentgit.sqlite3
 ```
 
-### 2. 요청 소유 변경만 commit
+## request-linked commit 보기
 
-에이전트가 코드를 수정한 뒤에는 다음처럼 commit합니다.
+현재 path:
 
 ```sh
-agentgit codex commit -m "요청 반영"
+agentgit
 ```
 
-이 명령은 `start` 이후에 새로 dirty가 된 파일만 stage하고 commit합니다. Git hook이
-새 commit을 로컬 SQLite 데이터베이스의 active request와 연결합니다.
-
-다른 provider도 같은 방식입니다.
+특정 repository, directory, file path:
 
 ```sh
-agentgit claude commit -m "요청 반영"
-agentgit gemini commit -m "요청 반영"
+agentgit /path/to/project
+agentgit /path/to/project/file.go
 ```
 
-### 3. 요청 종료
+commit 수 제한:
 
 ```sh
-agentgit codex finish
-```
-
-provider별 변형도 가능합니다.
-
-```sh
-agentgit claude finish
-agentgit gemini finish
-```
-
-### 4. request가 연결된 commit 보기
-
-```sh
-agentgit log
-```
-
-자주 쓰는 옵션:
-
-```sh
-agentgit log --limit 100
+agentgit --limit 100
+agentgit --limit 100 /path/to/project
 ```
 
 TUI 키:
@@ -101,36 +108,30 @@ TUI 키:
 - `m`: unified / split diff 전환
 - `q`: 종료
 
-TTY가 없으면 `agentgit log`는 TUI 대신 색상이 있는 정적 목록을 출력합니다.
+TTY가 없으면 `agentgit`은 TUI 대신 색상이 있는 정적 목록을 출력합니다.
 
-## 명령어
+예시:
 
-```sh
-agentgit setup
-agentgit setup-local
-agentgit log --limit 500
-agentgit version
-
-agentgit codex start --model <model> --message <message>
-agentgit codex commit -m <commit-message>
-agentgit codex finish
-
-agentgit claude start --model <model> --message <message>
-agentgit claude commit -m <commit-message>
-agentgit claude finish
-
-agentgit gemini start --model <model> --message <message>
-agentgit gemini commit -m <commit-message>
-agentgit gemini finish
+```text
+7cbbb0c8 04-06 15:16  commit message
+└─ ● [codex gpt-5] request message
+12345678 04-06 15:16  another commit
 ```
 
-generic provider 형태:
+## Provider 상태
 
-```sh
-agentgit request --provider codex start --model gpt-5 --message "request"
-agentgit request --provider claude commit -m "commit message"
-agentgit request --provider gemini finish
-```
+현재 지원:
+
+- `agentgit setup codex`
+
+추가 예정:
+
+- `agentgit setup claude`
+- `agentgit setup gemini`
+
+데이터베이스 schema는 `agent_name`, `model`, `session_id`, `turn_id`,
+`request_commits`처럼 일반적인 agent 용어를 사용하므로 Codex 전용 용어에 묶이지
+않습니다.
 
 ## 설치
 
@@ -206,40 +207,11 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-`export PATH=...`는 현재 셸 세션에만 적용됩니다. 새 터미널이나 재부팅 후에도
-계속 쓰려면 shell startup file에 넣어야 합니다.
+`export PATH=...`는 현재 셸 세션에만 적용됩니다. 새 터미널이나 재부팅 후에도 계속
+쓰려면 shell startup file에 넣어야 합니다.
 
 source checkout에서 개발할 때는 `bin/agentgit` wrapper가 `go run`으로 Go 명령을
 실행합니다. 배포 사용자는 컴파일된 binary를 설치해서 쓰는 편이 낫습니다.
-
-## 셋업
-
-```sh
-agentgit setup
-```
-
-이 명령은 데이터베이스를 초기화하고 Git 전역 `core.hooksPath`를
-`~/.config/agentgit/hooks`로 설정합니다. 다른 global hooks path가 이미 있으면
-agentgit은 자신의 `post-commit` 이후에 기존 hook도 이어서 호출합니다.
-
-## repository 단위 셋업
-
-```sh
-agentgit setup-local
-```
-
-이 명령은 PC 전체가 아니라 현재 repository에만 hook을 설치합니다. 기본 데이터베이스
-경로는 다음과 같습니다.
-
-```text
-~/.local/share/agentgit/agentgit.sqlite3
-```
-
-환경 변수로 덮어쓸 수 있습니다.
-
-```sh
-AGENTGIT_DB=/path/to/agentgit.sqlite3
-```
 
 ## 빌드
 
@@ -265,5 +237,5 @@ make release
 개발용 실행:
 
 ```sh
-go run ./cmd/agentgit --help
+go run ./cmd/agentgit -- --help
 ```

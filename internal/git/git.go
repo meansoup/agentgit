@@ -52,16 +52,30 @@ func RepoRoot(cwd string) (string, error) {
 	return filepath.Abs(strings.TrimSpace(out))
 }
 
-func GitDir(root string) (string, error) {
-	out, err := Run(root, "rev-parse", "--git-dir")
+func Head(root string) (string, error) {
+	out, err := Run(root, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
-	path := strings.TrimSpace(out)
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
+	return strings.TrimSpace(out), nil
+}
+
+func CommitsAfter(root string, afterHash string) ([]string, error) {
+	if afterHash == "" {
+		return nil, nil
 	}
-	return filepath.Abs(filepath.Join(root, path))
+	out, err := Run(root, "rev-list", "--reverse", afterHash+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	var hashes []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			hashes = append(hashes, line)
+		}
+	}
+	return hashes, nil
 }
 
 func StatusPaths(root string) (map[string]bool, error) {

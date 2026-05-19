@@ -78,7 +78,7 @@ func PrintStatic(w io.Writer, commits []git.Commit, links map[string][]store.Lin
 		}
 		for _, req := range links[commit.Hash] {
 			line := markerStyle.Render("└─ ●") + " " +
-				providerStyle.Render(fmt.Sprintf("[%s %s]", req.Provider, req.Model)) + " " +
+				providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)) + " " +
 				requestStyle.Render(req.Message)
 			if _, err := fmt.Fprintln(w, line); err != nil {
 				return err
@@ -196,7 +196,7 @@ func (m model) viewCommits() string {
 		for _, req := range m.links[commit.Hash] {
 			b.WriteString(markerStyle.Render("└─ ●"))
 			b.WriteByte(' ')
-			b.WriteString(providerStyle.Render(fmt.Sprintf("[%s %s]", req.Provider, req.Model)))
+			b.WriteString(providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)))
 			b.WriteByte(' ')
 			b.WriteString(requestStyle.Render(req.Message))
 			b.WriteByte('\n')

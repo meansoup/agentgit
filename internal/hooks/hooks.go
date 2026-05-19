@@ -1,135 +1,230 @@
 package hooks
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/minkuik/agentgit/internal/git"
-	"github.com/minkuik/agentgit/internal/state"
 	"github.com/minkuik/agentgit/internal/store"
 )
 
-func GlobalHooksDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", ".config", "agentgit", "hooks")
-	}
-	return filepath.Join(home, ".config", "agentgit", "hooks")
-}
+const AgentgitHookCommand = "agentgit hook codex"
 
-func InstallGlobal() (string, error) {
-	hooksDir := GlobalHooksDir()
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+func InstallCodex() (string, error) {
+	if _, err := store.Init(); err != nil {
 		return "", err
 	}
-	previous := strings.TrimSpace(git.RunAllowError("", "config", "--global", "--get", "core.hooksPath"))
-	var previousDir string
-	if previous != "" {
-		previousDir = expandHome(previous)
-		if !filepath.IsAbs(previousDir) {
-			abs, err := filepath.Abs(previousDir)
-			if err == nil {
-				previousDir = abs
+	if err := cleanupLegacyGitHook(); err != nil {
+		return "", err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		return "", err
+	}
+	hooksPath := filepath.Join(codexDir, "hooks.json")
+	root := map[string]json.RawMessage{}
+	cfg := codexHooksConfig{}
+	if raw, err := os.ReadFile(hooksPath); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &root); err != nil {
+			return "", fmt.Errorf("parse %s: %w", hooksPath, err)
+		}
+		if hooksRaw, ok := root["hooks"]; ok {
+			if err := json.Unmarshal(hooksRaw, &cfg.Hooks); err != nil {
+				return "", fmt.Errorf("parse %s hooks: %w", hooksPath, err)
 			}
 		}
 	}
-	if previousDir == hooksDir {
-		previousDir = ""
+	if cfg.Hooks == nil {
+		cfg.Hooks = map[string][]codexHookGroup{}
 	}
-	hook := filepath.Join(hooksDir, "post-commit")
-	if err := installHookFile(hook, previousDir); err != nil {
-		return "", err
-	}
-	if _, err := git.Run("", "config", "--global", "core.hooksPath", hooksDir); err != nil {
-		return "", err
-	}
-	return hook, nil
-}
-
-func InstallLocal(repoRoot string) (string, error) {
-	gitDir, err := git.GitDir(repoRoot)
+	cfg.Hooks["UserPromptSubmit"] = appendWithoutAgentgit(cfg.Hooks["UserPromptSubmit"])
+	cfg.Hooks["UserPromptSubmit"] = append(cfg.Hooks["UserPromptSubmit"], codexHookGroup{
+		Hooks: []codexHookHandler{{
+			Type:          "command",
+			Command:       AgentgitHookCommand,
+			Timeout:       30,
+			StatusMessage: "Recording agent request",
+		}},
+	})
+	cfg.Hooks["Stop"] = appendWithoutAgentgit(cfg.Hooks["Stop"])
+	cfg.Hooks["Stop"] = append(cfg.Hooks["Stop"], codexHookGroup{
+		Hooks: []codexHookHandler{{
+			Type:          "command",
+			Command:       AgentgitHookCommand,
+			Timeout:       120,
+			StatusMessage: "Linking request to commit",
+		}},
+	})
+	hooksRaw, err := json.Marshal(cfg.Hooks)
 	if err != nil {
 		return "", err
 	}
-	hooksDir := filepath.Join(gitDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	root["hooks"] = hooksRaw
+	raw, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
 		return "", err
 	}
-	hook := filepath.Join(hooksDir, "post-commit")
-	if err := installHookFile(hook, ""); err != nil {
+	raw = append(raw, '\n')
+	if err := os.WriteFile(hooksPath, raw, 0o644); err != nil {
 		return "", err
 	}
-	return hook, nil
+	return hooksPath, nil
 }
 
-func HandlePostCommit() error {
-	root, err := git.RepoRoot("")
+func cleanupLegacyGitHook() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	legacyDir := filepath.Join(home, ".config", "agentgit", "hooks")
+	current := strings.TrimSpace(git.RunAllowError("", "config", "--global", "--get", "core.hooksPath"))
+	if current == "" {
+		return nil
+	}
+	if current != legacyDir {
+		return nil
+	}
+	hook := filepath.Join(legacyDir, "post-commit")
+	raw, err := os.ReadFile(hook)
+	if err != nil {
+		return nil
+	}
+	if !strings.Contains(string(raw), "agentgit hook post-commit") {
+		return nil
+	}
+	_, err = git.Run("", "config", "--global", "--unset", "core.hooksPath")
+	return err
+}
+
+func HandleCodex(r io.Reader) error {
+	var input codexHookInput
+	if err := json.NewDecoder(r).Decode(&input); err != nil {
+		return err
+	}
+	if input.CWD == "" {
+		return nil
+	}
+	root, err := git.RepoRoot(input.CWD)
+	if err != nil {
+		return nil
+	}
+	switch input.HookEventName {
+	case "UserPromptSubmit":
+		return handleCodexUserPromptSubmit(input, root)
+	case "Stop":
+		return handleCodexStop(input, root)
+	default:
+		return nil
+	}
+}
+
+func handleCodexUserPromptSubmit(input codexHookInput, root string) error {
+	baseline, err := git.StatusPaths(root)
 	if err != nil {
 		return err
 	}
-	requestID, ok, err := state.GetActiveRequest(root)
+	head, _ := git.Head(root)
+	_, err = store.CreateOrUpdateRequest("codex", input.Model, input.Prompt, root, input.SessionID, input.TurnID, head, baseline)
+	return err
+}
+
+func handleCodexStop(input codexHookInput, root string) error {
+	req, ok, err := store.FindRequest("codex", input.SessionID, input.TurnID)
 	if err != nil || !ok {
 		return err
 	}
-	out, err := git.Run(root, "rev-parse", "HEAD")
+	current, err := git.StatusPaths(root)
 	if err != nil {
 		return err
 	}
-	return store.LinkCommit(requestID, strings.TrimSpace(out), root)
-}
-
-func installHookFile(hookPath string, previousHooksDir string) error {
-	existing, _ := os.ReadFile(hookPath)
-	if len(existing) > 0 && !strings.Contains(string(existing), "agentgit hook post-commit") {
-		backup := hookPath + ".agentgit-backup"
-		if _, err := os.Stat(backup); os.IsNotExist(err) {
-			if err := os.WriteFile(backup, existing, 0o755); err != nil {
-				return err
-			}
+	owned := map[string]bool{}
+	for path := range current {
+		if !req.BaselinePaths[path] {
+			owned[path] = true
 		}
-		content := strings.TrimRight(string(existing), "\n") + "\n\n# agentgit\n" + hookSnippet(previousHooksDir)
-		if err := os.WriteFile(hookPath, []byte(content), 0o755); err != nil {
+	}
+	if len(owned) > 0 {
+		commitHash, err := git.CommitPaths(root, owned, commitMessage(req))
+		if err != nil {
 			return err
 		}
-		return os.Chmod(hookPath, 0o755)
+		if err := store.LinkCommit(req.ID, commitHash, root); err != nil {
+			return err
+		}
+		return store.FinishRequest(req.ID)
 	}
-	content := "#!/bin/sh\n# Installed by agentgit.\n" + hookSnippet(previousHooksDir)
-	if err := os.WriteFile(hookPath, []byte(content), 0o755); err != nil {
+	hashes, err := git.CommitsAfter(root, req.BaselineHead)
+	if err != nil {
 		return err
 	}
-	return os.Chmod(hookPath, 0o755)
+	for _, hash := range hashes {
+		if err := store.LinkCommit(req.ID, hash, root); err != nil {
+			return err
+		}
+	}
+	return store.FinishRequest(req.ID)
 }
 
-func hookSnippet(previousHooksDir string) string {
-	lines := []string{
-		"if command -v agentgit >/dev/null 2>&1; then",
-		"  agentgit hook post-commit",
-		"fi",
-	}
-	if previousHooksDir != "" {
-		previous := filepath.Join(previousHooksDir, "post-commit")
-		lines = append(lines,
-			"",
-			fmt.Sprintf("if [ -x '%s' ]; then", previous),
-			fmt.Sprintf("  '%s' \"$@\"", previous),
-			"fi",
-		)
-	}
-	return strings.Join(lines, "\n") + "\n"
+type codexHooksConfig struct {
+	Hooks map[string][]codexHookGroup `json:"hooks"`
 }
 
-func expandHome(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
+type codexHookGroup struct {
+	Matcher string             `json:"matcher,omitempty"`
+	Hooks   []codexHookHandler `json:"hooks"`
+}
+
+type codexHookHandler struct {
+	Type          string `json:"type"`
+	Command       string `json:"command"`
+	Timeout       int    `json:"timeout,omitempty"`
+	StatusMessage string `json:"statusMessage,omitempty"`
+}
+
+type codexHookInput struct {
+	SessionID        string `json:"session_id"`
+	TranscriptPath   string `json:"transcript_path"`
+	CWD              string `json:"cwd"`
+	HookEventName    string `json:"hook_event_name"`
+	Model            string `json:"model"`
+	TurnID           string `json:"turn_id"`
+	Prompt           string `json:"prompt"`
+	LastAssistantMsg string `json:"last_assistant_message"`
+}
+
+func appendWithoutAgentgit(groups []codexHookGroup) []codexHookGroup {
+	var kept []codexHookGroup
+	for _, group := range groups {
+		var handlers []codexHookHandler
+		for _, handler := range group.Hooks {
+			if strings.TrimSpace(handler.Command) != AgentgitHookCommand {
+				handlers = append(handlers, handler)
+			}
+		}
+		if len(handlers) > 0 {
+			group.Hooks = handlers
+			kept = append(kept, group)
+		}
 	}
-	if path == "~" {
-		return home
+	return kept
+}
+
+func commitMessage(req store.Request) string {
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		message = "agent request"
 	}
-	if strings.HasPrefix(path, "~/") {
-		return filepath.Join(home, path[2:])
+	message = strings.ReplaceAll(message, "\n", " ")
+	if len(message) > 80 {
+		message = message[:80]
 	}
-	return path
+	return fmt.Sprintf("agentgit(%s): %s", req.AgentName, message)
 }

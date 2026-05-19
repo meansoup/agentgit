@@ -6,261 +6,250 @@
 
 ## Summary
 
-`agentgit` is a local developer tool that links AI-agent requests to Git
-commits, stores request metadata in a local database, and provides a terminal
-UI for browsing commit history with request context.
+`agentgit` is a distributable Go CLI/TUI tool that records coding-agent
+requests through each agent CLI's native hook system and links those requests to
+Git commits in a local SQLite database.
 
-The product must support `codex` immediately and be structured so that
-additional providers such as `gemini` and `claude` can use the same workflow.
+The user must continue using each agent CLI directly. For Codex, the user runs
+`codex` exactly as before. `agentgit` must work through installed hooks, not
+through replacement commands such as `agentgit codex start`.
+
+## Corrected Command Model
+
+There are two user-facing commands:
+
+```sh
+agentgit
+agentgit setup codex
+```
+
+`agentgit [path]` opens the TUI or static log view for the current path or the
+specified path.
+
+`agentgit setup codex` installs persistent Codex hook configuration for this
+machine.
+
+Internal hook entrypoints such as `agentgit hook codex` may exist, but they are
+not user-facing workflow commands.
 
 ## Problem
 
-AI-assisted coding sessions create a traceability gap:
+AI coding agents can edit files and create commits, but the request that caused
+each change is often lost. Developers need a local, deterministic way to see:
 
-- Developers can ask an agent to change code, but later it is hard to identify
-  which user request produced which commit.
-- Teams need commit history to remain clean and segmented by request.
-- Request metadata must be queryable locally without depending on an AI model at
-  read time.
-- Setup must be simple enough to install once and use across repositories on
-  the same machine.
+- which request was sent to an agent
+- which agent and model handled it
+- which Git commit was created for the request
+- which files and diffs belong to the commit
+
+This must happen without changing the normal agent CLI workflow.
 
 ## Goals
 
-- Record AI-agent requests locally in a deterministic schema.
-- Ensure each agent-driven code change can be committed as a request-scoped
-  commit.
-- Link commits to the request that produced them by using Git hooks.
-- Provide a static, schema-driven command that shows Git history alongside AI
-  request context.
-- Provide a keyboard-driven terminal UI for exploring commits, changed files,
-  and diffs.
-- Support one-time machine setup and repeatable usage across repositories.
+- Keep Codex usage unchanged: users continue to run `codex`.
+- Install Codex hooks once per machine with `agentgit setup codex`.
+- Capture Codex request metadata from Codex lifecycle hook payloads.
+- Automatically commit request-owned file changes when a request changes files
+  inside a Git repository.
+- Store request and commit links in a local SQLite database using generic,
+  provider-neutral terminology.
+- Provide `agentgit [path]` to statically load schema-backed data and show
+  request-linked Git history.
+- Preserve a TUI flow for commit cursor, file cursor, and file diff navigation.
+- Keep the implementation in Go for maintainable binary distribution on macOS
+  and Ubuntu/Linux.
 
 ## Non-Goals
 
-- Cloud sync of request metadata.
-- AI-generated summaries at read time.
-- Replacing Git hosting UI such as GitHub PR review.
-- Multi-user database coordination.
-- Automatic commit message generation.
+- Replacing `codex`, `claude`, or `gemini` commands.
+- Requiring users to run `agentgit codex start`, `agentgit codex commit`, or
+  `agentgit codex finish`.
+- Using an AI model to reconstruct request-commit links at read time.
+- Cloud sync or multi-user database coordination.
+- Git hosting integration.
 
-## Primary Users
+## Required Codex Workflow
 
-- Individual developers using AI coding agents locally.
-- Teams that want a reproducible local workflow before broader rollout.
-- Maintainers packaging `agentgit` for internal or external distribution.
+Setup:
 
-## Core User Stories
+```sh
+agentgit setup codex
+```
 
-1. As a developer, I want to start an AI request so the tool records the
-   provider, model, and request message locally.
-2. As a developer, I want to commit only the files changed by that request so my
-   Git history stays segmented by task.
-3. As a developer, I want the commit to be linked automatically to the active
-   AI request through a Git hook.
-4. As a developer, I want to browse commit history and see which AI request
-   produced each commit.
-5. As a developer, I want to expand a commit into files and expand a file into a
-   diff directly from the terminal.
-6. As a maintainer, I want setup to be installed once per machine and then work
-   in any repository without per-repo manual hook wiring.
-7. As a future integrator, I want `gemini` and `claude` to follow the same
-   command pattern as `codex`.
+Daily use:
+
+```sh
+cd /path/to/git/project
+codex
+agentgit
+```
+
+Expected behavior:
+
+- Codex runs normally.
+- Agentgit receives Codex hook events.
+- If a Codex request modifies files in a Git repository, agentgit creates a
+  request-scoped commit for only those files.
+- Agentgit records the request, agent name, model, session id, turn id, commit
+  id, repository root, and timestamps in the local database.
+- `agentgit` shows the current repository's commit list with linked request rows.
+
+## Future Agent Workflow
+
+The same model must be extended to:
+
+```sh
+agentgit setup claude
+agentgit setup gemini
+```
+
+Claude and Gemini users must continue using their native CLIs. Agentgit should
+integrate through each tool's hook/config system.
 
 ## Functional Requirements
 
-### 1. Request Tracking
+### 1. Setup
 
-- The tool must support `codex start`, `codex commit`, and `codex finish`.
-- The tool must expose the same command structure for `gemini` and `claude`.
-- `start` must record:
-  - provider
+- `agentgit setup codex` must install Codex lifecycle hook configuration for the
+  current machine.
+- Setup must persist after terminal restart and PC reboot.
+- Setup must not require per-repository manual installation.
+- Setup must initialize the local database.
+- Setup must preserve existing Codex hooks when possible and avoid duplicate
+  agentgit hook entries.
+
+### 2. Codex Hook Capture
+
+- Agentgit must use Codex lifecycle hooks instead of replacing the Codex command.
+- On request submission, agentgit must record:
+  - agent name
   - model
   - request message
-  - repository root
-  - snapshot of files already dirty before the request
-- `finish` must mark the active request as completed.
-- Only one active request per repository is required for the initial version.
+  - session id
+  - turn id
+  - current working directory
+  - Git repository root, when available
+  - dirty-file baseline
+  - current `HEAD`
+- On request stop/completion, agentgit must determine whether request-owned
+  files changed.
 
-### 2. Request-Scoped Commit Creation
+### 3. Request-Scoped Commit Creation
 
-- When a code-changing request is committed through `agentgit`, only the files
-  changed by that request must be included.
-- Files that were already dirty before `start` must be excluded by default.
-- A user must be able to override that baseline with an explicit option when the
-  request began before `start` was invoked.
-- Each `agentgit ... commit` call must create a Git commit for that request's
-  changes.
-- The tool must fail with a clear error if there are no request-owned file
-  changes to commit.
-
-### 3. Git Hook to Database Link
-
-- When an `agentgit`-managed commit is created, the active request must be
-  linked to the new commit hash through a local Git hook.
-- The hook must be installable once per machine through a global Git hooks path.
-- The product must preserve an existing global hooks path by chaining the prior
-  `post-commit` hook when possible.
-- A repository-local hook installation path may exist as a fallback, but the
-  primary setup flow must be machine-wide.
+- If a request changes files in a Git repository, agentgit must commit those
+  changed files as a request-scoped commit.
+- Files already dirty before the request must not be included in the request
+  commit.
+- If a commit was already created during the request, agentgit must link commits
+  created after the request baseline `HEAD`.
+- If no Git repository is present, agentgit must not create a commit.
+- If no request-owned changes exist, agentgit must not create an empty commit.
 
 ### 4. Local Database
 
-- Request and request-to-commit link data must be stored in a local deterministic
-  schema.
-- The read path must be static and schema-driven. It must not ask an AI model to
-  synthesize results from raw data.
-- The initial storage engine is SQLite.
-- The default database path should be local to the machine user account and
-  overridable by environment variable.
+- The database must be local SQLite by default:
 
-### 5. Commit and Request Browser
+```text
+~/.local/share/agentgit/agentgit.sqlite3
+```
 
-- The product must provide a command that shows Git commit history for the
-  current repository.
-- When a commit has linked AI requests, those requests must be shown directly
-  beneath the commit entry.
-- The UI must visually distinguish:
-  - commit id
-  - agent provider and model
+- `AGENTGIT_DB` must override the database path.
+- Schema terminology must be provider-neutral and not Codex-specific.
+- Required request fields:
+  - request id
+  - agent name
+  - model
   - request message
-- The browser must support keyboard navigation with a commit-level cursor.
-- Pressing `Right` on a commit must expand the changed file list for that commit.
-- The file list must have its own cursor and support `Up` and `Down`.
-- Pressing `Right` on a file must show the diff for that file.
-- Pressing `Left` must navigate back from diff to file list and from file list to
-  commit list.
-- The diff viewer must support:
-  - unified view
-  - split view similar to PR-style side-by-side comparison
-- Pressing `m` must toggle diff mode between unified and split.
-- The browser must support `q` to quit.
-- When a TTY is not available, the command must still print a readable static
-  view of commits and linked requests.
+  - session id
+  - turn id
+  - repository root
+  - baseline dirty-file snapshot
+  - baseline `HEAD`
+  - started timestamp
+  - finished timestamp
+- Required link fields:
+  - request id
+  - commit hash
+  - repository root
+  - linked timestamp
 
-## UX Requirements
+### 5. Request-Commit Browser
 
-- The commit list should resemble Git log output but add linked request rows
-  below matching commits.
-- The terminal output should be colorized when supported.
-- The request row should clearly indicate provider and model, for example:
+- `agentgit` with no args must show the current path's Git commit list.
+- `agentgit <file_path>` must show the Git commit list for the repository
+  containing that file path.
+- `agentgit <directory_path>` must show the Git commit list for that repository.
+- Request metadata must be loaded from the local database through static SQL
+  based on the schema.
+- No AI model may be used to construct the request-commit view.
+
+Display format:
 
 ```text
 7cbbb0c8 04-06 15:16  commit message
-└─ ● [codex gpt-5] implement request
+└─ ● [codex model] request message
+12345678 04-06 15:16  another commit
+abcdefgh 04-06 15:16  another commit
+└─ ● [codex model] request message
 ```
 
-- Navigation must be keyboard-first and usable without a mouse.
+Visual requirements:
 
-## Setup and Installation Requirements
+- Commit id has a distinct color.
+- Agent/model label has a distinct color.
+- Request message has a distinct color.
 
-### Machine-Wide Setup
+TUI navigation:
 
-- The primary setup command must be `agentgit setup`.
-- `agentgit setup` must:
-  - initialize the database
-  - install a global `post-commit` hook
-  - configure `git config --global core.hooksPath ...`
-- After setup, the workflow should work in any Git repository on the machine.
+- Commit list has a commit-level cursor.
+- `Up` and `Down` move through commits.
+- `Right` on a commit opens the changed-file list for that commit.
+- File list has its own cursor.
+- `Up` and `Down` move through files.
+- `Right` on a file opens the file diff.
+- `Left` returns from diff to files and from files to commits.
+- `m` toggles unified diff and split diff.
+- `q` exits.
 
-### Packaging and Distribution
+### 6. Distribution and Maintenance
 
-- The project must be buildable as Go distribution artifacts.
-- Release artifacts must include:
-  - macOS arm64 binary
-  - macOS amd64 binary
-  - Ubuntu/Linux arm64 binary
-  - Ubuntu/Linux amd64 binary
-- Documentation must describe:
-  - how to build the artifacts
-  - how to install a release binary
-  - how to run from a source checkout
-  - how persistent shell `PATH` configuration differs from temporary `export`
-  - platform-specific usage for macOS and Ubuntu
-
-## Non-Functional Requirements
-
-- Local-first operation with no network dependency for core workflows.
-- Safe behavior in dirty repositories by respecting pre-existing modified files.
-- Commands should be usable from standard developer shells.
-- The product must avoid destructive Git operations.
-- The implementation should remain understandable and extensible for additional
-  providers.
-
-## Data Model
-
-The initial schema must include:
-
-- `agent_requests`
-  - request id
-  - provider
-  - model
-  - message
-  - repo root
-  - baseline dirty-file snapshot
-  - started timestamp
-  - finished timestamp
-- `request_commits`
-  - request id
-  - commit hash
-  - repo root
-  - linked timestamp
-
-## CLI Requirements
-
-Required commands:
-
-- `agentgit setup`
-- `agentgit log`
-- `agentgit codex start --model ... --message ...`
-- `agentgit codex commit -m ...`
-- `agentgit codex finish`
-
-Required extension shape:
-
-- `agentgit gemini start|commit|finish`
-- `agentgit claude start|commit|finish`
-
-Optional fallback command:
-
-- `agentgit setup-local`
+- The implementation language is Go.
+- The product must build to standalone binaries for:
+  - macOS amd64
+  - macOS arm64
+  - Ubuntu/Linux amd64
+  - Ubuntu/Linux arm64
+- Documentation must cover install, persistent PATH setup, setup, browsing, and
+  release builds.
 
 ## Success Criteria
 
-- A developer can install the tool once on a machine and use it across
-  repositories.
-- A developer can create request-scoped commits through `agentgit`.
-- Each `agentgit` commit is linked to a request in the local database.
-- The log browser can display commits with linked request metadata without AI
-  assistance.
-- The TUI supports navigation from commit to file to diff and back.
-- Documentation is sufficient for both local developer usage and release
-  packaging.
-
-## Risks and Constraints
-
-- Global `core.hooksPath` changes machine-level Git behavior and must be handled
-  carefully.
-- Dirty working trees require reliable baseline tracking to avoid accidental
-  inclusion of unrelated files.
-- Side-by-side diff rendering in terminal UIs is constrained by terminal width.
-- Global `core.hooksPath` relies on `agentgit` being available on `PATH`, so
-  release installation must place a stable binary in a persistent PATH location.
+- A user installs agentgit, runs `agentgit setup codex`, then continues using
+  `codex` directly.
+- A Codex request that changes files in a Git repo produces a request-scoped
+  commit.
+- The request and commit are linked in the local database.
+- `agentgit` shows the linked request under the matching commit.
+- `agentgit <file_path>` works from a file path.
+- The TUI supports commit/file/diff navigation and diff mode switching.
 
 ## Current Status
 
-The current implementation covers the initial end-to-end workflow:
+Implemented:
 
-- local SQLite schema
-- request start, commit, finish flow
-- global setup via `agentgit setup`
-- local fallback setup via `agentgit setup-local`
-- `codex`, `gemini`, and `claude` command surfaces
-- commit-to-request hook linking
-- TUI and non-TTY log output
-- Go binary build and installation documentation
+- Go CLI/TUI
+- `agentgit [path]`
+- `agentgit setup codex`
+- Codex `UserPromptSubmit` and `Stop` hook integration
+- local SQLite storage
+- provider-neutral schema extensions such as `agent_name`, `session_id`,
+  `turn_id`, and `baseline_head`
+- request-scoped commit creation from Codex hook events
+- commit/request TUI with file and diff drill-down
+- macOS and Linux release builds
 
-Future work may add Homebrew packages, Debian packages, broader provider
-integrations, and more advanced request lifecycle management, but those are
-outside this initial PRD.
+Planned:
+
+- `agentgit setup claude`
+- `agentgit setup gemini`
+- richer hook diagnostics and setup verification
