@@ -29,6 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="install hooks and initialize the local database")
     setup.set_defaults(func=cmd_setup)
 
+    setup_global = sub.add_parser("setup-global", help="install global hooks once for this PC")
+    setup_global.set_defaults(func=cmd_setup_global)
+
     log = sub.add_parser("log", help="browse commits with linked AI requests")
     log.add_argument("--limit", type=int, default=500)
     log.set_defaults(func=cmd_log)
@@ -76,6 +79,15 @@ def cmd_setup(_args: argparse.Namespace) -> int:
     hook = hooks.install_post_commit_hook(root)
     print(f"initialized db: {db_path}")
     print(f"installed hook: {hook}")
+    return 0
+
+
+def cmd_setup_global(_args: argparse.Namespace) -> int:
+    db_path = db.init_db()
+    hook = hooks.install_global_hooks()
+    print(f"initialized db: {db_path}")
+    print(f"installed global hook: {hook}")
+    print(f"configured: git config --global core.hooksPath {hook.parent}")
     return 0
 
 

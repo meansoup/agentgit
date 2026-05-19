@@ -17,14 +17,26 @@ If editable install is not available, add this checkout's `bin` directory to
 export PATH="/path/to/agentgit/bin:$PATH"
 ```
 
-## Setup in any Git repository
+## Setup once per PC
+
+```sh
+agentgit setup-global
+```
+
+This initializes the database and configures Git's global `core.hooksPath` to
+`~/.config/agentgit/hooks`, so commits in any repository can be linked to active
+agent requests. If another global hooks path already exists, agentgit preserves
+and calls its `post-commit` hook after recording its own data.
+
+## Setup in one Git repository
 
 ```sh
 agentgit setup
 ```
 
-This installs a `post-commit` hook in the current repository and initializes the
-local database. The default database is:
+Use this only when you want repository-local setup instead of PC-wide setup. It
+installs a `post-commit` hook in the current repository and initializes the local
+database. The default database is:
 
 ```text
 ~/.local/share/agentgit/agentgit.sqlite3
