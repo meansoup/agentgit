@@ -166,13 +166,15 @@ AI-assisted coding sessions create a traceability gap:
 
 ### Packaging and Distribution
 
-- The project must be buildable as Python distribution artifacts.
+- The project must be buildable as Go distribution artifacts.
 - Release artifacts must include:
-  - source distribution
-  - wheel
+  - macOS arm64 binary
+  - macOS amd64 binary
+  - Ubuntu/Linux arm64 binary
+  - Ubuntu/Linux amd64 binary
 - Documentation must describe:
   - how to build the artifacts
-  - how to install from a wheel
+  - how to install a release binary
   - how to run from a source checkout
   - how persistent shell `PATH` configuration differs from temporary `export`
   - platform-specific usage for macOS and Ubuntu
@@ -243,8 +245,8 @@ Optional fallback command:
 - Dirty working trees require reliable baseline tracking to avoid accidental
   inclusion of unrelated files.
 - Side-by-side diff rendering in terminal UIs is constrained by terminal width.
-- Older system Python and packaging tools may limit editable-install behavior,
-  so release packaging should prefer wheel-based installation.
+- Global `core.hooksPath` relies on `agentgit` being available on `PATH`, so
+  release installation must place a stable binary in a persistent PATH location.
 
 ## Current Status
 
@@ -257,7 +259,8 @@ The current implementation covers the initial end-to-end workflow:
 - `codex`, `gemini`, and `claude` command surfaces
 - commit-to-request hook linking
 - TUI and non-TTY log output
-- build and installation documentation
+- Go binary build and installation documentation
 
-Future work may add richer packaging, broader provider integrations, and more
-advanced request lifecycle management, but those are outside this initial PRD.
+Future work may add Homebrew packages, Debian packages, broader provider
+integrations, and more advanced request lifecycle management, but those are
+outside this initial PRD.

@@ -6,93 +6,112 @@ diffs.
 
 ## Build
 
-Build distribution artifacts for release:
+Build a local binary:
 
 ```sh
-python3 -m pip install --upgrade build
-python3 -m build
+go build -o dist/agentgit ./cmd/agentgit
 ```
 
-Artifacts are created in `dist/`:
-
-- `dist/agentgit-<version>.tar.gz`
-- `dist/agentgit-<version>-py3-none-any.whl`
-
-Optional release checks:
+Build release binaries for macOS and Ubuntu/Linux:
 
 ```sh
-python3 -m pip install --upgrade twine
-python3 -m twine check dist/*
+make release
 ```
 
-## Install for development
+Release artifacts are created in `dist/`:
+
+- `agentgit_<version>_darwin_amd64`
+- `agentgit_<version>_darwin_arm64`
+- `agentgit_<version>_linux_amd64`
+- `agentgit_<version>_linux_arm64`
+
+## Run for development
 
 ```sh
-python3 -m pip install -e .
+go run ./cmd/agentgit --help
 ```
 
 ## Install for use
 
-For a packaged release, prefer installing the wheel:
-
-```sh
-python3 -m pip install dist/agentgit-<version>-py3-none-any.whl
-```
-
-If you are running directly from a checkout instead of an installed package, the
-`bin/agentgit` wrapper must be on `PATH`.
-
-`export PATH=...` only affects the current shell session. It does not survive
-opening a new terminal or rebooting the PC unless you add it to a shell startup
-file.
+For a packaged release, install the matching binary for your OS and CPU
+architecture somewhere on `PATH`.
 
 ### macOS
 
-Temporary for the current shell only:
+Apple Silicon:
 
 ```sh
-export PATH="/path/to/agentgit/bin:$PATH"
+install -m 0755 dist/agentgit_<version>_darwin_arm64 /usr/local/bin/agentgit
 ```
 
-Persistent for future terminals on macOS with `zsh`:
+Intel Mac:
 
 ```sh
-echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.zshrc
+install -m 0755 dist/agentgit_<version>_darwin_amd64 /usr/local/bin/agentgit
+```
+
+If `/usr/local/bin` is not writable, install to a user-owned directory:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 0755 dist/agentgit_<version>_darwin_arm64 "$HOME/.local/bin/agentgit"
+```
+
+Persistent `PATH` for macOS `zsh`:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-If your macOS shell is `bash` instead:
+Persistent `PATH` for macOS `bash`:
 
 ```sh
-echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.bash_profile
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bash_profile
 source ~/.bash_profile
 ```
 
 ### Ubuntu
 
-Temporary for the current shell only:
+x86_64:
 
 ```sh
-export PATH="/path/to/agentgit/bin:$PATH"
+install -m 0755 dist/agentgit_<version>_linux_amd64 /usr/local/bin/agentgit
 ```
 
-Persistent for future terminals on Ubuntu with `bash`:
+ARM64:
 
 ```sh
-echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.bashrc
+install -m 0755 dist/agentgit_<version>_linux_arm64 /usr/local/bin/agentgit
+```
+
+If `/usr/local/bin` is not writable, install to a user-owned directory:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 0755 dist/agentgit_<version>_linux_amd64 "$HOME/.local/bin/agentgit"
+```
+
+Persistent `PATH` for Ubuntu `bash`:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-If your Ubuntu shell is `zsh` instead:
+Persistent `PATH` for Ubuntu `zsh`:
 
 ```sh
-echo 'export PATH="/path/to/agentgit/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-For distribution to end users, the cleaner path is publishing a wheel and having
-users install `agentgit` with `pip`, `pipx`, Homebrew, or an OS package rather
-than relying on manual `PATH` edits from a source checkout.
+`export PATH=...` only affects the current shell session. It does not survive
+opening a new terminal or rebooting the PC unless you add it to a shell startup
+file.
+
+For local source-checkout development, `bin/agentgit` runs the Go command with
+`go run`; release users should install the compiled binary instead.
 
 ## Setup once per PC
 
