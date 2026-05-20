@@ -12,22 +12,23 @@ browsing request-linked commit history.
 
 ## Commands
 
-There are two user-facing commands:
+The main commands you will use are:
 
 ```sh
 agentgit
 agentgit setup codex
+agentgit setup gemini
 ```
 
-`agentgit [path]` shows request-linked commits for the current path or a
-specified path.
+`agentgit [path]` shows the Git commits linked to AI requests in the current or specified folder.
 
-`agentgit setup codex` installs Codex lifecycle hooks once for this PC.
+`agentgit setup codex` or `agentgit setup gemini` installs the "hooks" that connect `agentgit` to your AI tools.
 
-Internal hook command:
+Internal hook commands:
 
 ```sh
 agentgit hook codex
+agentgit hook gemini
 ```
 
 This command is written into Codex hook configuration and is not meant to be run
@@ -52,16 +53,16 @@ normal for non-managed Codex hooks.
 
 ## How It Works
 
-`agentgit setup codex` writes hook configuration to:
+`agentgit setup` connects `agentgit` to your AI tool's configuration:
 
-```text
-~/.codex/config.toml
-```
+- **Codex**: `~/.codex/config.toml`
+- **Gemini**: `~/.gemini/settings.json`
 
-It also writes a small cross-platform POSIX shell runner to:
+It also creates small runner scripts in:
 
 ```text
 ~/.local/share/agentgit/agentgit-codex-hook
+~/.local/share/agentgit/agentgit-gemini-hook
 ```
 
 The runner executes the installed `agentgit` binary by absolute path, so Codex
@@ -134,16 +135,16 @@ Example:
 12345678 04-06 15:16  another commit
 ```
 
-## Provider Status
+## Supported Tools (Providers)
 
-Current setup support:
+Currently supported:
 
 - `agentgit setup codex`
+- `agentgit setup gemini`
 
-Planned setup support:
+Planned support:
 
 - `agentgit setup claude`
-- `agentgit setup gemini`
 
 The database schema uses generic agent terms such as `agent_name`, `model`,
 `session_id`, `turn_id`, and `request_commits`, so it is not tied to Codex-only

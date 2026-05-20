@@ -12,22 +12,23 @@ request가 파일을 변경했다면 request 단위 commit을 만들고, request
 
 ## 명령어
 
-사용자가 직접 쓰는 명령어는 두 개입니다.
+사용자가 직접 쓰는 명령어는 다음과 같습니다.
 
 ```sh
 agentgit
 agentgit setup codex
+agentgit setup gemini
 ```
 
-`agentgit [path]`는 현재 path 또는 지정 path에 대한 request-linked commit을
-보여줍니다.
+`agentgit [path]`는 현재 폴더 또는 지정한 폴더에서 AI가 요청한 내용과 연결된 Git 커밋들을 보여줍니다.
 
-`agentgit setup codex`는 이 PC에 Codex lifecycle hook을 한 번 설치합니다.
+`agentgit setup codex` 또는 `agentgit setup gemini`는 내 컴퓨터에 AI 도구와 연결되는 갈고리(hook)를 한 번 설치합니다.
 
 내부 hook 명령:
 
 ```sh
 agentgit hook codex
+agentgit hook gemini
 ```
 
 이 명령은 Codex hook 설정에 기록되는 내부용 명령이며, 직접 실행할 필요가 없습니다.
@@ -51,17 +52,16 @@ Codex hook에서는 정상적인 흐름입니다.
 
 ## 동작 방식
 
-`agentgit setup codex`는 hook 설정을 다음 위치에 씁니다.
+`agentgit setup` 명령은 AI 도구의 설정 파일에 `agentgit`을 연결합니다.
 
-```text
-~/.codex/config.toml
-```
+- **Codex**: `~/.codex/config.toml`
+- **Gemini**: `~/.gemini/settings.json`
 
-또한 macOS와 Ubuntu에서 함께 동작하는 작은 POSIX shell runner를 다음 위치에
-씁니다.
+또한 macOS와 리눅스에서 동작하는 작은 실행 도구(runner)를 다음 위치에 만듭니다.
 
 ```text
 ~/.local/share/agentgit/agentgit-codex-hook
+~/.local/share/agentgit/agentgit-gemini-hook
 ```
 
 runner는 설치된 `agentgit` binary를 절대 경로로 실행하므로, Codex가 interactive
@@ -131,16 +131,16 @@ TTY 환경에서는 `tmux`나 `k9s`처럼 전체 화면 alternate-screen TUI로 
 12345678 04-06 15:16  another commit
 ```
 
-## Provider 상태
+## 지원 도구 (Provider)
 
 현재 지원:
 
 - `agentgit setup codex`
+- `agentgit setup gemini`
 
 추가 예정:
 
 - `agentgit setup claude`
-- `agentgit setup gemini`
 
 데이터베이스 schema는 `agent_name`, `model`, `session_id`, `turn_id`,
 `request_commits`처럼 일반적인 agent 용어를 사용하므로 Codex 전용 용어에 묶이지
