@@ -332,19 +332,16 @@ func (m model) viewCommitsWithPreview() string {
 func (m model) viewCommitsList(width int) string {
 	var b strings.Builder
 	for i, commit := range m.commits {
-		line := fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.ShortHash), commit.Date, truncateVisible(commit.Subject, max(0, width-19)))
+		line := fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
+		line = truncateVisible(line, width)
 		if i == m.commitIdx {
 			line = cursorStyle.Render(line)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
 		for _, req := range m.links[commit.Hash] {
-			messageWidth := max(0, width-8-len(req.AgentName)-len(req.Model))
-			b.WriteString(markerStyle.Render("└─ ●"))
-			b.WriteByte(' ')
-			b.WriteString(providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)))
-			b.WriteByte(' ')
-			b.WriteString(requestStyle.Render(truncateVisible(req.Message, messageWidth)))
+			reqLine := fmt.Sprintf("%s [%s %s] %s", markerStyle.Render("└─ ●"), req.AgentName, req.Model, req.Message)
+			b.WriteString(truncateVisible(reqLine, width))
 			b.WriteByte('\n')
 		}
 	}
@@ -414,16 +411,15 @@ func (m model) viewFilesList(width int) string {
 		return ""
 	}
 	commit := m.commits[m.commitIdx]
-	b.WriteString(hashStyle.Render(commit.ShortHash))
-	b.WriteByte(' ')
-	b.WriteString(truncateVisible(commit.Subject, max(0, width-10)))
+	header := fmt.Sprintf("%s %s", hashStyle.Render(commit.ShortHash), commit.Subject)
+	b.WriteString(truncateVisible(header, width))
 	b.WriteString("\n\n")
 	for i, file := range m.files {
-		line := fileStyle.Render(truncateVisible(file, width))
+		line := fileStyle.Render(file)
 		if i == m.fileIdx {
 			line = cursorStyle.Render(line)
 		}
-		b.WriteString(line)
+		b.WriteString(truncateVisible(line, width))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -605,8 +601,10 @@ func joinColumns(leftLines, rightLines []string, leftWidth int) string {
 		if i < len(rightLines) {
 			right = rightLines[i]
 		}
+		// Strictly enforce leftWidth for perfect vertical alignment
+		left = truncateVisible(left, leftWidth)
 		b.WriteString(padPlain(left, leftWidth))
-		b.WriteString(" │ ")
+		b.WriteString(mutedStyle.Render(" │ "))
 		b.WriteString(right)
 		b.WriteByte('\n')
 	}
@@ -636,10 +634,44 @@ func truncateVisible(s string, width int) string {
 	if lipgloss.Width(s) <= width {
 		return s
 	}
-	if width <= 3 {
+	tail := "..."
+	tailWidth := lipgloss.Width(tail)
+	if width <= tailWidth {
 		return takeVisible(s, width)
 	}
-	return takeVisible(s, width-3) + "..."
+	return takeVisible(s, width-tailWidth) + tail
+}
+
+func takeVisible(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	// We need to handle ANSI codes. A simple way is to use lipgloss's internal 
+	// or similar logic, but we can iterate and check width at each step.
+	// Note: This is a bit slow but correct for small strings.
+	var b strings.Builder
+	var visibleWidth int
+	
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		// If we encounter an escape sequence, we should include it without counting its width.
+		if runes[i] == '\x1b' {
+			b.WriteRune(runes[i])
+			for i+1 < len(runes) && runes[i] != 'm' {
+				i++
+				b.WriteRune(runes[i])
+			}
+			continue
+		}
+		
+		charWidth := lipgloss.Width(string(runes[i]))
+		if visibleWidth+charWidth > width {
+			break
+		}
+		b.WriteRune(runes[i])
+		visibleWidth += charWidth
+	}
+	return b.String()
 }
 
 func previewLineLimit(height int) int {
@@ -647,21 +679,6 @@ func previewLineLimit(height int) int {
 		return 40
 	}
 	return max(5, height-7)
-}
-
-func takeVisible(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range s {
-		next := b.String() + string(r)
-		if lipgloss.Width(next) > width {
-			break
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 func (m model) modeName() string {
