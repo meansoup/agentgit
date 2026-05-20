@@ -1,260 +1,68 @@
 # agentgit
 
-한국어 문서: [READEME_ko.md](./READEME_ko.md)
+**agentgit** bridges AI coding agent requests with Git commits. Use your agent CLI (`codex`, `gemini`) as usual; `agentgit` automatically captures requests, commits file changes, and links them in a local TUI browser.
 
-Keep this file in sync with `READEME_ko.md`.
-
-`agentgit` links AI-agent requests to Git commits without changing how you use
-the agent CLI. After setup, keep using `codex` normally. `agentgit` receives
-Codex lifecycle hook events, records requests in a local SQLite database, creates
-request-scoped commits when a request changed files, and provides a TUI for
-browsing request-linked commit history.
-
-## Commands
-
-The main commands you will use are:
-
-```sh
-agentgit
-agentgit setup codex
-agentgit setup gemini
-```
-
-`agentgit [path]` shows the Git commits linked to AI requests in the current or specified folder.
-
-`agentgit setup codex` or `agentgit setup gemini` installs the "hooks" that connect `agentgit` to your AI tools.
-
-Internal hook commands:
-
-```sh
-agentgit hook codex
-agentgit hook gemini
-```
-
-This command is written into Codex hook configuration and is not meant to be run
-manually.
+[한국어 문서 (README_ko.md)](./README_ko.md)
 
 ## Quick Start
 
-```sh
-# Install the release binary somewhere on PATH first.
-agentgit setup codex
+1. **Install**: Place the `agentgit` binary in your `PATH`.
+2. **Setup**: Link to your preferred AI agent.
+   ```sh
+   agentgit setup codex
+   # or
+   agentgit setup gemini
+   ```
+3. **Use**: Run your agent normally (e.g., `codex`). Then browse the linked history:
+   ```sh
+   agentgit
+   ```
 
-cd /path/to/project
-codex
-# Use Codex normally. If the request changes files in a Git repository,
-# agentgit records the request and creates a request-scoped commit.
+## Essential Commands
 
-agentgit
-```
+| Command | Description |
+| :--- | :--- |
+| `agentgit` | Open the history browser for the current directory. |
+| `agentgit [path]` | Browse history for a specific repo, folder, or file. |
+| `agentgit setup [agent]` | Install hooks for `codex` or `gemini`. |
+| `agentgit --limit 50` | Limit the number of commits shown. |
 
-Codex may ask you to review and trust the installed hook from `/hooks`. This is
-normal for non-managed Codex hooks.
+## TUI Navigation
+
+- **Move**: `j`/`k` or `Up`/`Down`
+- **Drill down**: `l`, `Right`, or `Enter` (Commit → Files → Diff)
+- **Go back**: `h`, `Left`, or `Backspace`
+- **Toggle View**: `m` (Unified/Split diff)
+- **Next/Prev Hunk**: `n`/`p`
+- **Quit**: `q`
 
 ## How It Works
 
-`agentgit setup` connects `agentgit` to your AI tool's configuration:
+- **Hooks**: `agentgit setup` installs lifecycle hooks that trigger on agent events.
+- **Auto-Commit**: When an agent modifies files, `agentgit` creates a request-scoped commit for those specific changes.
+- **Local DB**: Metadata is stored in `~/.local/share/agentgit/agentgit.sqlite3`.
+- **Transparency**: Your existing workflow remains unchanged. `agentgit` works silently in the background.
 
-- **Codex**: `~/.codex/config.toml`
-- **Gemini**: `~/.gemini/settings.json`
+## Installation
 
-It also creates small runner scripts in:
-
-```text
-~/.local/share/agentgit/agentgit-codex-hook
-~/.local/share/agentgit/agentgit-gemini-hook
-```
-
-The runner executes the installed `agentgit` binary by absolute path, so Codex
-hooks keep working on macOS and Ubuntu even when Codex starts with a smaller
-`PATH` than your interactive shell.
-
-The Codex hook flow is:
-
-- `UserPromptSubmit`: record the request message, agent name, model, session id,
-  turn id, current Git root, dirty-file baseline, and current `HEAD`.
-- `Stop`: compare the current working tree to the baseline, commit only files
-  changed by that request, and link the resulting commit to the recorded request.
-- If Codex or the user already created commits during the request, `agentgit`
-  links commits created after the baseline `HEAD`.
-
-The database is local and CLI-agnostic:
-
-```text
-~/.local/share/agentgit/agentgit.sqlite3
-```
-
-Override it with:
+Download the binary for your OS and architecture, then:
 
 ```sh
-AGENTGIT_DB=/path/to/agentgit.sqlite3
-```
+# Example for macOS (Apple Silicon)
+mkdir -p ~/.local/bin
+install -m 0755 dist/agentgit_darwin_arm64 ~/.local/bin/agentgit
 
-## Browse Request-Linked Commits
-
-Current path:
-
-```sh
-agentgit
-```
-
-Specific repository, directory, or file path:
-
-```sh
-agentgit /path/to/project
-agentgit /path/to/project/file.go
-```
-
-Limit commit count:
-
-```sh
-agentgit --limit 100
-agentgit --limit 100 /path/to/project
-```
-
-TUI keys:
-
-- `Up` / `Down` or `k` / `j`: move cursor
-- `Right` / `Enter` or `l`: commit -> files -> diff
-- `Left` / `Backspace` or `h`: diff -> files -> commits
-- `m`: toggle unified and split diff views
-- `n` / `p`: jump to next or previous changed hunk in the diff view
-- `q`: quit
-
-In non-TTY environments, `agentgit` prints a static colorized view instead of
-opening the TUI.
-
-In TTY environments, `agentgit` opens a full-screen alternate-screen TUI, similar
-to tools such as `tmux` or `k9s`.
-
-Example:
-
-```text
-7cbbb0c8 04-06 15:16  commit message
-└─ ● [codex gpt-5] request message
-12345678 04-06 15:16  another commit
-```
-
-## Supported Tools (Providers)
-
-Currently supported:
-
-- `agentgit setup codex`
-- `agentgit setup gemini`
-
-Planned support:
-
-- `agentgit setup claude`
-
-The database schema uses generic agent terms such as `agent_name`, `model`,
-`session_id`, `turn_id`, and `request_commits`, so it is not tied to Codex-only
-terminology.
-
-## Install
-
-For a packaged release, install the matching binary for your OS and CPU
-architecture somewhere on `PATH`.
-
-### macOS
-
-Apple Silicon:
-
-```sh
-install -m 0755 dist/agentgit_<version>_darwin_arm64 /usr/local/bin/agentgit
-```
-
-Intel Mac:
-
-```sh
-install -m 0755 dist/agentgit_<version>_darwin_amd64 /usr/local/bin/agentgit
-```
-
-If `/usr/local/bin` is not writable, install to a user-owned directory:
-
-```sh
-mkdir -p "$HOME/.local/bin"
-install -m 0755 dist/agentgit_<version>_darwin_arm64 "$HOME/.local/bin/agentgit"
-```
-
-Persistent `PATH` for macOS `zsh`:
-
-```sh
+# Add to PATH (zsh)
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
-
-Persistent `PATH` for macOS `bash`:
-
-```sh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bash_profile
-source ~/.bash_profile
-```
-
-### Ubuntu
-
-x86_64:
-
-```sh
-install -m 0755 dist/agentgit_<version>_linux_amd64 /usr/local/bin/agentgit
-```
-
-ARM64:
-
-```sh
-install -m 0755 dist/agentgit_<version>_linux_arm64 /usr/local/bin/agentgit
-```
-
-If `/usr/local/bin` is not writable, install to a user-owned directory:
-
-```sh
-mkdir -p "$HOME/.local/bin"
-install -m 0755 dist/agentgit_<version>_linux_amd64 "$HOME/.local/bin/agentgit"
-```
-
-Persistent `PATH` for Ubuntu `bash`:
-
-```sh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-Persistent `PATH` for Ubuntu `zsh`:
-
-```sh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-`export PATH=...` only affects the current shell session. It does not survive
-opening a new terminal or rebooting the PC unless you add it to a shell startup
-file.
-
-For local source-checkout development, `bin/agentgit` runs the Go command with
-`go run`; release users should install the compiled binary instead.
 
 ## Build
 
-Build a local binary:
-
 ```sh
+# Local binary
 go build -o dist/agentgit ./cmd/agentgit
-```
 
-Build release binaries for macOS and Ubuntu/Linux:
-
-```sh
+# Release binaries
 make release
-```
-
-Release artifacts are created in `dist/`:
-
-- `agentgit_<version>_darwin_amd64`
-- `agentgit_<version>_darwin_arm64`
-- `agentgit_<version>_linux_amd64`
-- `agentgit_<version>_linux_arm64`
-
-Run for development:
-
-```sh
-go run ./cmd/agentgit -- --help
 ```
