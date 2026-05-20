@@ -26,6 +26,9 @@ func InstallCodex() (string, error) {
 	if err := cleanupLegacyGitHook(); err != nil {
 		return "", err
 	}
+	if err := cleanupLegacyLocalGitHook("."); err != nil {
+		return "", err
+	}
 	runner, err := installCodexHookRunner()
 	if err != nil {
 		return "", err
@@ -81,6 +84,29 @@ func cleanupLegacyGitHook() error {
 	}
 	_, err = git.Run("", "config", "--global", "--unset", "core.hooksPath")
 	return err
+}
+
+func cleanupLegacyLocalGitHook(cwd string) error {
+	root, err := git.RepoRoot(cwd)
+	if err != nil {
+		return nil
+	}
+	hook := filepath.Join(root, ".git", "hooks", "post-commit")
+	raw, err := os.ReadFile(hook)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	content := string(raw)
+	if !strings.Contains(content, "# Installed by agentgit.") {
+		return nil
+	}
+	if !strings.Contains(content, "agentgit hook post-commit") {
+		return nil
+	}
+	return os.Remove(hook)
 }
 
 func cleanupLegacyCodexHooksJSON(codexDir string) error {
