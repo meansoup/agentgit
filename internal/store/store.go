@@ -215,13 +215,27 @@ func FindRequest(agentName, sessionID, turnID string) (Request, bool, error) {
 	err = db.QueryRow(
 		`SELECT id
 		 FROM agent_requests
-		 WHERE COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ?
+		 WHERE COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ? AND finished_at IS NULL
 		 ORDER BY id DESC
 		 LIMIT 1`,
 		agentName,
 		sessionID,
 		turnID,
 	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Try without finished_at IS NULL just in case, but for Gemini it's important to find the right turn.
+		// Actually, for Codex it might be fine to find finished ones if turn_id is unique.
+		err = db.QueryRow(
+			`SELECT id
+			 FROM agent_requests
+			 WHERE COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ?
+			 ORDER BY id DESC
+			 LIMIT 1`,
+			agentName,
+			sessionID,
+			turnID,
+		).Scan(&id)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return Request{}, false, nil
 	}

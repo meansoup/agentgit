@@ -47,15 +47,15 @@ func run(args []string) error {
 func usage() {
 	fmt.Println(`usage:
   agentgit [--limit 500] [path]
-  agentgit setup codex
-  agentgit hook codex
+  agentgit setup codex|gemini
+  agentgit hook codex|gemini
   agentgit version
 
 commands:
   agentgit                      browse request-linked commits for the current path
   agentgit <path>               browse request-linked commits for a path
-  setup codex                   install Codex lifecycle hooks once for this PC
-  hook codex                    internal Codex hook entrypoint
+  setup codex|gemini            install lifecycle hooks once for this PC
+  hook codex|gemini             internal hook entrypoint
   version                       print version`)
 }
 
@@ -87,7 +87,7 @@ func cmdBrowse(args []string) error {
 
 func cmdSetup(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: agentgit setup codex")
+		return errors.New("usage: agentgit setup codex|gemini")
 	}
 	switch args[0] {
 	case "codex":
@@ -97,17 +97,23 @@ func cmdSetup(args []string) error {
 		}
 		fmt.Println("installed codex hooks:", hooksPath)
 		fmt.Println("codex may ask you to review and trust the new hooks via /hooks")
-	case "claude", "gemini":
+	case "gemini":
+		hooksPath, err := hooks.InstallGemini()
+		if err != nil {
+			return err
+		}
+		fmt.Println("installed gemini hooks:", hooksPath)
+	case "claude":
 		return fmt.Errorf("setup for %s is not implemented yet", args[0])
 	default:
-		return errors.New("usage: agentgit setup codex")
+		return errors.New("usage: agentgit setup codex|gemini")
 	}
 	return nil
 }
 
 func cmdHook(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: agentgit hook codex")
+		return errors.New("usage: agentgit hook codex|gemini")
 	}
 	switch args[0] {
 	case "codex":
@@ -115,9 +121,14 @@ func cmdHook(args []string) error {
 			fmt.Fprintln(os.Stderr, "agentgit hook codex:", err)
 		}
 		return nil
+	case "gemini":
+		if err := hooks.HandleGemini(os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, "agentgit hook gemini:", err)
+		}
+		return nil
 	case "post-commit":
 		return nil
 	default:
-		return errors.New("usage: agentgit hook codex")
+		return errors.New("usage: agentgit hook codex|gemini")
 	}
 }

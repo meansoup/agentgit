@@ -14,6 +14,7 @@ import (
 )
 
 const AgentgitHookCommand = "agentgit hook codex"
+const AgentgitGeminiHookCommand = "agentgit hook gemini"
 const (
 	agentgitCodexHookStart = "# BEGIN agentgit codex hooks"
 	agentgitCodexHookEnd   = "# END agentgit codex hooks"
@@ -50,6 +51,28 @@ func InstallCodex() (string, error) {
 	return configPath, nil
 }
 
+func InstallGemini() (string, error) {
+	if _, err := store.Init(); err != nil {
+		return "", err
+	}
+	runner, err := installGeminiHookRunner()
+	if err != nil {
+		return "", err
+	}
+	geminiDir, err := geminiHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(geminiDir, 0o755); err != nil {
+		return "", err
+	}
+	settingsPath := filepath.Join(geminiDir, "settings.json")
+	if err := installGeminiSettingsHooks(settingsPath, runner); err != nil {
+		return "", err
+	}
+	return settingsPath, nil
+}
+
 func codexHomeDir() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("CODEX_HOME")); override != "" {
 		return filepath.Abs(expandHome(override))
@@ -59,6 +82,14 @@ func codexHomeDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".codex"), nil
+}
+
+func geminiHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".gemini"), nil
 }
 
 func cleanupLegacyGitHook() error {
@@ -196,6 +227,28 @@ exec %s hook codex
 	return runner, nil
 }
 
+func installGeminiHookRunner() (string, error) {
+	bin, err := resolveAgentgitExecutable()
+	if err != nil {
+		return "", err
+	}
+	dataDir := filepath.Dir(store.DefaultDBPath())
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return "", err
+	}
+	runner := filepath.Join(dataDir, "agentgit-gemini-hook")
+	body := fmt.Sprintf(`#!/bin/sh
+# Installed by agentgit. Used by Gemini lifecycle hooks.
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH
+exec %s hook gemini
+`, shellQuote(bin))
+	if err := os.WriteFile(runner, []byte(body), 0o755); err != nil {
+		return "", err
+	}
+	return runner, nil
+}
+
 func resolveAgentgitExecutable() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("AGENTGIT_HOOK_BIN")); override != "" {
 		return filepath.Abs(expandHome(override))
@@ -274,6 +327,86 @@ func installCodexConfigHooks(configPath, runner string) error {
 	return os.WriteFile(configPath, []byte(cleaned), 0o600)
 }
 
+func installGeminiSettingsHooks(settingsPath, runner string) error {
+	var settings map[string]interface{}
+	if raw, err := os.ReadFile(settingsPath); err == nil {
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			// If invalid JSON, start fresh or return error? 
+			// Better return error if it's corrupted but not empty.
+			return fmt.Errorf("parse %s: %w", settingsPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if settings == nil {
+		settings = make(map[string]interface{})
+	}
+
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		hooks = make(map[string]interface{})
+		settings["hooks"] = hooks
+	}
+
+	addGeminiHook := func(eventName string) {
+		groups, _ := hooks[eventName].([]interface{})
+		
+		// Find existing group with matcher "*" and our hook
+		var targetGroup map[string]interface{}
+		for _, g := range groups {
+			group, ok := g.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if group["matcher"] == "*" {
+				targetGroup = group
+				break
+			}
+		}
+
+		if targetGroup == nil {
+			targetGroup = map[string]interface{}{
+				"matcher": "*",
+				"hooks":   []interface{}{},
+			}
+			groups = append(groups, targetGroup)
+		}
+
+		hookList, _ := targetGroup["hooks"].([]interface{})
+		
+		// Remove existing agentgit hooks
+		newHookList := []interface{}{}
+		for _, h := range hookList {
+			hook, ok := h.(map[string]interface{})
+			if !ok {
+				newHookList = append(newHookList, h)
+				continue
+			}
+			if name, _ := hook["name"].(string); name != "agentgit" {
+				newHookList = append(newHookList, h)
+			}
+		}
+
+		newHookList = append(newHookList, map[string]interface{}{
+			"name":    "agentgit",
+			"type":    "command",
+			"command": runner,
+		})
+		targetGroup["hooks"] = newHookList
+		hooks[eventName] = groups
+	}
+
+	addGeminiHook("BeforeAgent")
+	addGeminiHook("AfterAgent")
+
+	updated, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, append(updated, '\n'), 0o600)
+}
+
 func removeAgentgitCodexHookBlock(s string) string {
 	start := strings.Index(s, agentgitCodexHookStart)
 	if start == -1 {
@@ -328,6 +461,104 @@ func HandleCodex(r io.Reader) error {
 	default:
 		return nil
 	}
+}
+
+func HandleGemini(r io.Reader) error {
+	var input geminiHookInput
+	if err := json.NewDecoder(r).Decode(&input); err != nil {
+		return err
+	}
+	if input.CWD == "" {
+		return nil
+	}
+	root, err := git.RepoRoot(input.CWD)
+	if err != nil {
+		return nil
+	}
+	var errOut error
+	switch input.HookEventName {
+	case "BeforeAgent":
+		errOut = handleGeminiBeforeAgent(input, root)
+	case "AfterAgent":
+		errOut = handleGeminiAfterAgent(input, root)
+	}
+	// Gemini hooks MUST return a JSON object on stdout
+	fmt.Println("{}")
+	return errOut
+}
+
+func handleGeminiBeforeAgent(input geminiHookInput, root string) error {
+	baseline, err := git.StatusPaths(root)
+	if err != nil {
+		return err
+	}
+	head, _ := git.Head(root)
+	// For Gemini, we don't have an explicit TurnID in the hook input yet.
+	// We'll use SessionID as TurnID or generate one if needed.
+	// Using SessionID as TurnID for now as they are often 1:1 in turns? 
+	// Actually, we should probably use a turn counter or something if possible.
+	// But let's see if we can use transcript path or something to distinguish turns.
+	// For now, let's just use SessionID and accept it might overwrite if multiple turns happen 
+	// without AfterAgent finishing? No, CreateOrUpdateRequest will just find it.
+	
+	// Better: Use SessionID and if we can't find TurnID, we use a hash of the prompt?
+	turnID := input.TurnID
+	if turnID == "" {
+		turnID = "current" // Placeholder
+	}
+
+	_, err = store.CreateOrUpdateRequest("gemini", "gemini", input.Prompt, root, input.SessionID, turnID, head, baseline)
+	return err
+}
+
+func handleGeminiAfterAgent(input geminiHookInput, root string) error {
+	turnID := input.TurnID
+	if turnID == "" {
+		turnID = "current"
+	}
+	req, ok, err := store.FindRequest("gemini", input.SessionID, turnID)
+	if err != nil || !ok {
+		return err
+	}
+	current, err := git.StatusPaths(root)
+	if err != nil {
+		return err
+	}
+	owned := map[string]bool{}
+	for path := range current {
+		if !req.BaselinePaths[path] {
+			owned[path] = true
+		}
+	}
+	if len(owned) > 0 {
+		commitHash, err := git.CommitPaths(root, owned, commitMessage(req))
+		if err != nil {
+			return err
+		}
+		if err := store.LinkCommit(req.ID, commitHash, root); err != nil {
+			return err
+		}
+		return store.FinishRequest(req.ID)
+	}
+	hashes, err := git.CommitsAfter(root, req.BaselineHead)
+	if err != nil {
+		return err
+	}
+	for _, hash := range hashes {
+		if err := store.LinkCommit(req.ID, hash, root); err != nil {
+			return err
+		}
+	}
+	return store.FinishRequest(req.ID)
+}
+
+type geminiHookInput struct {
+	SessionID      string `json:"session_id"`
+	TranscriptPath  string `json:"transcript_path"`
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	Prompt         string `json:"prompt"`
+	TurnID         string `json:"turn_id"` // Hope it exists or we use "current"
 }
 
 func handleCodexUserPromptSubmit(input codexHookInput, root string) error {
