@@ -208,6 +208,9 @@ func resolveAgentgitExecutable() (string, error) {
 			return exe, nil
 		}
 	}
+	if local, err := resolveLocalCheckoutLauncher(); err == nil {
+		return local, nil
+	}
 	if path, err := exec.LookPath("agentgit"); err == nil {
 		abs, absErr := filepath.Abs(path)
 		if absErr != nil {
@@ -219,6 +222,26 @@ func resolveAgentgitExecutable() (string, error) {
 		return abs, nil
 	}
 	return "", fmt.Errorf("agentgit executable was not found; install agentgit on PATH or set AGENTGIT_HOOK_BIN")
+}
+
+func resolveLocalCheckoutLauncher() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	root, err := git.RepoRoot(cwd)
+	if err != nil {
+		return "", err
+	}
+	launcher := filepath.Join(root, "bin", "agentgit")
+	mainGo := filepath.Join(root, "cmd", "agentgit", "main.go")
+	if _, err := os.Stat(launcher); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(mainGo); err != nil {
+		return "", err
+	}
+	return launcher, nil
 }
 
 func isUsableHookExecutable(path string) bool {
