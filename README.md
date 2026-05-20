@@ -1,8 +1,8 @@
 # agentgit
 
-한국어 문서: [README.ko.md](./README.ko.md)
+한국어 문서: [READEME_ko.md](./READEME_ko.md)
 
-Keep this file in sync with `README.ko.md`.
+Keep this file in sync with `READEME_ko.md`.
 
 `agentgit` links AI-agent requests to Git commits without changing how you use
 the agent CLI. After setup, keep using `codex` normally. `agentgit` receives
@@ -55,8 +55,18 @@ normal for non-managed Codex hooks.
 `agentgit setup codex` writes hook configuration to:
 
 ```text
-~/.codex/hooks.json
+~/.codex/config.toml
 ```
+
+It also writes a small cross-platform POSIX shell runner to:
+
+```text
+~/.local/share/agentgit/agentgit-codex-hook
+```
+
+The runner executes the installed `agentgit` binary by absolute path, so Codex
+hooks keep working on macOS and Ubuntu even when Codex starts with a smaller
+`PATH` than your interactive shell.
 
 The Codex hook flow is:
 
@@ -107,10 +117,14 @@ TUI keys:
 - `Right` / `Enter` or `l`: commit -> files -> diff
 - `Left` / `Backspace` or `h`: diff -> files -> commits
 - `m`: toggle unified and split diff views
+- `n` / `p`: jump to next or previous changed hunk in the diff view
 - `q`: quit
 
 In non-TTY environments, `agentgit` prints a static colorized view instead of
 opening the TUI.
+
+In TTY environments, `agentgit` opens a full-screen alternate-screen TUI, similar
+to tools such as `tmux` or `k9s`.
 
 Example:
 

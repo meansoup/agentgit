@@ -54,8 +54,18 @@ Codex hook에서는 정상적인 흐름입니다.
 `agentgit setup codex`는 hook 설정을 다음 위치에 씁니다.
 
 ```text
-~/.codex/hooks.json
+~/.codex/config.toml
 ```
+
+또한 macOS와 Ubuntu에서 함께 동작하는 작은 POSIX shell runner를 다음 위치에
+씁니다.
+
+```text
+~/.local/share/agentgit/agentgit-codex-hook
+```
+
+runner는 설치된 `agentgit` binary를 절대 경로로 실행하므로, Codex가 interactive
+shell보다 좁은 `PATH`로 시작해도 hook이 계속 동작합니다.
 
 Codex hook 흐름:
 
@@ -106,9 +116,12 @@ TUI 키:
 - `Right` / `Enter` 또는 `l`: commit -> file -> diff
 - `Left` / `Backspace` 또는 `h`: diff -> file -> commit
 - `m`: unified / split diff 전환
+- `n` / `p`: diff 화면에서 다음/이전 변경 hunk로 이동
 - `q`: 종료
 
 TTY가 없으면 `agentgit`은 TUI 대신 색상이 있는 정적 목록을 출력합니다.
+
+TTY 환경에서는 `tmux`나 `k9s`처럼 전체 화면 alternate-screen TUI로 열립니다.
 
 예시:
 

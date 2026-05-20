@@ -149,7 +149,7 @@ func ChangedFiles(root string, commitHash string) ([]string, error) {
 }
 
 func UnifiedDiff(root string, commitHash string, path string) ([]string, error) {
-	out, err := Run(root, "show", "--format=", "--no-ext-diff", commitHash, "--", path)
+	out, err := Run(root, "show", "--format=", "--no-ext-diff", "--unified=999999", commitHash, "--", path)
 	if err != nil {
 		return nil, err
 	}
