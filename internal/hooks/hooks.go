@@ -507,7 +507,12 @@ func handleGeminiBeforeAgent(input geminiHookInput, root string) error {
 		turnID = "current" // Placeholder
 	}
 
-	_, err = store.CreateOrUpdateRequest("gemini", "gemini", input.Prompt, root, input.SessionID, turnID, head, baseline)
+	model := input.Model
+	if model == "" {
+		model = "gemini"
+	}
+
+	_, err = store.CreateOrUpdateRequest("gemini", "gemini", model, input.Prompt, root, input.SessionID, turnID, head, baseline)
 	return err
 }
 
@@ -557,6 +562,7 @@ type geminiHookInput struct {
 	TranscriptPath  string `json:"transcript_path"`
 	CWD            string `json:"cwd"`
 	HookEventName  string `json:"hook_event_name"`
+	Model          string `json:"model"`
 	Prompt         string `json:"prompt"`
 	TurnID         string `json:"turn_id"` // Hope it exists or we use "current"
 }
@@ -567,7 +573,7 @@ func handleCodexUserPromptSubmit(input codexHookInput, root string) error {
 		return err
 	}
 	head, _ := git.Head(root)
-	_, err = store.CreateOrUpdateRequest("codex", input.Model, input.Prompt, root, input.SessionID, input.TurnID, head, baseline)
+	_, err = store.CreateOrUpdateRequest("codex", "codex", input.Model, input.Prompt, root, input.SessionID, input.TurnID, head, baseline)
 	return err
 }
 

@@ -124,7 +124,7 @@ func Init() (string, error) {
 	return DefaultDBPath(), err
 }
 
-func CreateRequest(agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
+func CreateRequest(provider, agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
 	if _, err := Init(); err != nil {
 		return 0, err
 	}
@@ -144,7 +144,7 @@ func CreateRequest(agentName, model, message, repoRoot, sessionID, turnID, basel
 	res, err := db.Exec(
 		`INSERT INTO agent_requests(provider, agent_name, model, message, repo_root, session_id, turn_id, baseline_status_json, baseline_head)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		agentName,
+		provider,
 		agentName,
 		model,
 		message,
@@ -160,13 +160,13 @@ func CreateRequest(agentName, model, message, repoRoot, sessionID, turnID, basel
 	return res.LastInsertId()
 }
 
-func CreateOrUpdateRequest(agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
+func CreateOrUpdateRequest(provider, agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
 	if existing, ok, err := FindRequest(agentName, sessionID, turnID); err != nil {
 		return 0, err
 	} else if ok {
 		return existing.ID, nil
 	}
-	return CreateRequest(agentName, model, message, repoRoot, sessionID, turnID, baselineHead, baseline)
+	return CreateRequest(provider, agentName, model, message, repoRoot, sessionID, turnID, baselineHead, baseline)
 }
 
 func GetRequest(id int64) (Request, error) {
