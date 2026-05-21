@@ -509,6 +509,12 @@ func handleGeminiBeforeAgent(input geminiHookInput, root string) error {
 
 	model := input.Model
 	if model == "" {
+		model = input.ModelID
+	}
+	if model == "" {
+		model = input.Engine
+	}
+	if model == "" {
 		model = "gemini"
 	}
 
@@ -563,6 +569,8 @@ type geminiHookInput struct {
 	CWD            string `json:"cwd"`
 	HookEventName  string `json:"hook_event_name"`
 	Model          string `json:"model"`
+	ModelID        string `json:"model_id"`
+	Engine         string `json:"engine"`
 	Prompt         string `json:"prompt"`
 	TurnID         string `json:"turn_id"` // Hope it exists or we use "current"
 }
