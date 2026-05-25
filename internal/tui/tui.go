@@ -10,6 +10,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/minkuik/agentgit/internal/git"
 	"github.com/minkuik/agentgit/internal/store"
+
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 )
 
 type mode int
@@ -18,6 +23,7 @@ const (
 	modeCommits mode = iota
 	modeFiles
 	modeDiff
+	modeFullFile
 )
 
 type diffMode int
@@ -33,8 +39,10 @@ type model struct {
 	links     map[string][]store.LinkedRequest
 	files     []string
 	diffLines []string
+	fullLines []string
 	fileCache map[string][]string
 	diffCache map[string][]string
+	fullCache map[string][]string
 	mode      mode
 	diffMode  diffMode
 	commitIdx int
@@ -73,10 +81,42 @@ func Run(root string, limit int) error {
 	if !isTTY(os.Stdout) || !isTTY(os.Stdin) {
 		return PrintStatic(os.Stdout, commits, links)
 	}
-	m := model{root: root, commits: commits, links: links, fileCache: map[string][]string{}, diffCache: map[string][]string{}}
+	m := model{
+		root:      root,
+		commits:   commits,
+		links:     links,
+		fileCache: map[string][]string{},
+		diffCache: map[string][]string{},
+		fullCache: map[string][]string{},
+	}
 	m.loadCommitFiles()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+func Highlight(filename, code string) []string {
+	lexer := lexers.Get(filename)
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	lexer = chroma.Coalesce(lexer)
+	style := styles.Get("monokai")
+	if style == nil {
+		style = styles.Fallback
+	}
+	formatter := formatters.Get("terminal256")
+	if formatter == nil {
+		formatter = formatters.Fallback
+	}
+	iterator, err := lexer.Tokenise(nil, code)
+	if err != nil {
+		return strings.Split(code, "\n")
+	}
+	var buf strings.Builder
+	if err := formatter.Format(&buf, style, iterator); err != nil {
+		return strings.Split(code, "\n")
+	}
+	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 }
 
 func PrintStatic(w io.Writer, commits []git.Commit, links map[string][]store.LinkedRequest) error {
@@ -123,6 +163,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.diffMode = diffUnified
 			}
+		case "f":
+			m.toggleFullFile()
 		case "n":
 			m.jumpHunk(1)
 		case "p":
@@ -138,7 +180,7 @@ func (m model) View() string {
 	}
 	content, focusLine := m.contentView()
 	if m.width <= 0 || m.height <= 0 {
-		return titleStyle.Render(fmt.Sprintf("agentgit %s  diff:%s  n/p:hunk  q:quit", m.modeName(), m.diffModeName())) + "\n\n" + content
+		return titleStyle.Render(fmt.Sprintf("agentgit %s  diff:%s  f:full  n/p:hunk  q:quit", m.modeName(), m.diffModeName())) + "\n\n" + content
 	}
 	return m.viewFrame(content, focusLine)
 }
@@ -151,6 +193,8 @@ func (m model) contentView() (string, int) {
 		return m.viewFiles(), m.fileFocusLine()
 	case modeDiff:
 		return m.viewDiff(), 2
+	case modeFullFile:
+		return m.viewFullFile(), 2
 	default:
 		return "", 0
 	}
@@ -194,7 +238,9 @@ func (m model) helpText() string {
 	case modeFiles:
 		return "j/k move  enter/l diff  h back  q quit"
 	case modeDiff:
-		return "j/k scroll  n/p hunk  m split/unified  h back  q quit"
+		return "j/k scroll  n/p hunk  m split/unified  f full  h back  q quit"
+	case modeFullFile:
+		return "j/k scroll  f diff  h back  q quit"
 	default:
 		return "q quit"
 	}
@@ -208,7 +254,7 @@ func (m *model) move(delta int) {
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
 		m.loadSelectedDiff()
-	case modeDiff:
+	case modeDiff, modeFullFile:
 		m.scroll = max(0, m.scroll+delta)
 	}
 }
@@ -275,10 +321,23 @@ func (m *model) enter() {
 
 func (m *model) back() {
 	switch m.mode {
-	case modeDiff:
+	case modeDiff, modeFullFile:
 		m.mode = modeFiles
 	case modeFiles:
 		m.mode = modeCommits
+	}
+}
+
+func (m *model) toggleFullFile() {
+	if m.mode == modeDiff {
+		m.loadFullFile()
+		if m.err == nil {
+			m.mode = modeFullFile
+			m.scroll = 0
+		}
+	} else if m.mode == modeFullFile {
+		m.mode = modeDiff
+		m.scroll = 0
 	}
 }
 
@@ -472,6 +531,50 @@ func (m model) viewDiff() string {
 	return b.String()
 }
 
+func (m model) viewFullFile() string {
+	var b strings.Builder
+	if len(m.commits) == 0 || len(m.files) == 0 {
+		return ""
+	}
+	b.WriteString(hashStyle.Render(m.commits[m.commitIdx].ShortHash))
+	b.WriteByte(' ')
+	b.WriteString(fileStyle.Render(m.files[m.fileIdx]))
+	b.WriteString(" (Full File)\n\n")
+	if m.scroll >= len(m.fullLines) {
+		m.scroll = max(0, len(m.fullLines)-1)
+	}
+	for _, line := range m.fullLines[m.scroll:] {
+		if m.width > 0 {
+			line = truncateVisible(line, m.width)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func (m *model) loadFullFile() {
+	if len(m.commits) == 0 || len(m.files) == 0 {
+		m.fullLines = nil
+		return
+	}
+	hash := m.commits[m.commitIdx].Hash
+	path := m.files[m.fileIdx]
+	key := hash + "\x00" + path
+	if lines, ok := m.fullCache[key]; ok {
+		m.fullLines = lines
+		return
+	}
+	content, err := git.CatFile(m.root, hash, path)
+	if err != nil {
+		m.err = err
+		return
+	}
+	lines := Highlight(path, content)
+	m.fullCache[key] = lines
+	m.fullLines = lines
+}
+
 func (m *model) loadCommitFiles() {
 	if len(m.commits) == 0 {
 		return
@@ -511,8 +614,39 @@ func (m *model) loadSelectedDiff() {
 		m.err = err
 		return
 	}
-	m.diffCache[key] = lines
-	m.diffLines = lines
+
+	// Apply syntax highlighting to diff lines
+	highlighted := highlightDiff(path, lines)
+
+	m.diffCache[key] = highlighted
+	m.diffLines = highlighted
+}
+
+func highlightDiff(filename string, lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	// To highlight a diff properly, we should ideally highlight the whole file
+	// or try to highlight blocks. For simplicity, we'll highlight line by line
+	// if it's code. But chroma works better on blocks.
+	// Let's try to identify code lines and highlight them.
+	
+	result := make([]string, len(lines))
+	for i, line := range lines {
+		if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ') {
+			prefix := line[0]
+			content := line[1:]
+			hLines := Highlight(filename, content)
+			if len(hLines) > 0 {
+				result[i] = string(prefix) + hLines[0]
+			} else {
+				result[i] = line
+			}
+		} else {
+			result[i] = line
+		}
+	}
+	return result
 }
 
 func (m model) visibleDiffLines() []string {

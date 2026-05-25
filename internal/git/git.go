@@ -156,6 +156,14 @@ func UnifiedDiff(root string, commitHash string, path string) ([]string, error) 
 	return strings.Split(strings.TrimRight(out, "\n"), "\n"), nil
 }
 
+func CatFile(root string, commitHash string, path string) (string, error) {
+	out, err := Run(root, "show", commitHash+":"+path)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
 func CommitPaths(root string, paths map[string]bool, message string) (string, error) {
 	if len(paths) == 0 {
 		return "", errors.New("no request-owned file changes to commit")
