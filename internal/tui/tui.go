@@ -188,9 +188,9 @@ func (m model) View() string {
 func (m model) contentView() (string, int) {
 	switch m.mode {
 	case modeCommits:
-		return m.viewCommits(), m.commitFocusLine()
+		return m.viewCommitsList(m.width), m.commitFocusLine()
 	case modeFiles:
-		return m.viewFiles(), m.fileFocusLine()
+		return m.viewFilesList(m.width), m.fileFocusLine()
 	case modeDiff:
 		return m.viewDiff(), 2
 	case modeFullFile:
@@ -203,12 +203,111 @@ func (m model) contentView() (string, int) {
 func (m model) viewFrame(content string, focusLine int) string {
 	header := headerStyle.Width(m.width).Render(fmt.Sprintf("agentgit  %s  diff:%s", m.modeName(), m.diffModeName()))
 	footer := footerStyle.Width(m.width).Render(m.helpText())
-	bodyHeight := max(0, m.height-lipgloss.Height(header)-lipgloss.Height(footer))
-	body := m.viewBody(content, bodyHeight, focusLine)
-	if body == "" {
-		return header + "\n" + footer
+	
+	var staticTop string
+	switch m.mode {
+	case modeCommits:
+		staticTop = m.viewCommitDetailsPreview()
+	case modeFiles:
+		staticTop = m.viewFileDetailsPreview()
 	}
-	return header + "\n" + body + "\n" + footer
+
+	topHeight := lipgloss.Height(staticTop)
+	headerHeight := lipgloss.Height(header)
+	footerHeight := lipgloss.Height(footer)
+	
+	bodyHeight := max(0, m.height-headerHeight-footerHeight-topHeight)
+	body := m.viewBody(content, bodyHeight, focusLine)
+	
+	res := header + "\n"
+	if staticTop != "" {
+		res += staticTop + "\n"
+	}
+	res += body + "\n" + footer
+	return res
+}
+
+func (m model) viewCommitDetailsPreview() string {
+	if len(m.commits) == 0 {
+		return ""
+	}
+	commit := m.commits[m.commitIdx]
+	var b strings.Builder
+	
+	// Commit Header
+	b.WriteString(titleStyle.Render("Commit Details"))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
+	b.WriteString("\n\n")
+	
+	// Request Messages (Full)
+	requests := m.links[commit.Hash]
+	if len(requests) > 0 {
+		b.WriteString(markerStyle.Render("Requests:"))
+		b.WriteString("\n")
+		for _, req := range requests {
+			// Wrap message to width
+			msg := requestStyle.Render(req.Message)
+			b.WriteString(fmt.Sprintf("  ● [%s %s] %s\n", providerStyle.Render(req.AgentName), providerStyle.Render(req.Model), msg))
+		}
+		b.WriteString("\n")
+	}
+	
+	// Changed Files Summary
+	files := m.fileCache[commit.Hash]
+	if len(files) > 0 {
+		b.WriteString(markerStyle.Render(fmt.Sprintf("Files (%d):", len(files))))
+		count := min(len(files), 3)
+		for i := 0; i < count; i++ {
+			b.WriteString(" " + fileStyle.Render(files[i]))
+		}
+		if len(files) > count {
+			b.WriteString(mutedStyle.Render(fmt.Sprintf(" ...and %d more", len(files)-count)))
+		}
+		b.WriteString("\n")
+	}
+	
+	style := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color("8")).
+		Padding(0, 1).
+		Width(m.width)
+	
+	return style.Render(b.String())
+}
+
+func (m model) viewFileDetailsPreview() string {
+	if len(m.commits) == 0 || len(m.files) == 0 {
+		return ""
+	}
+	file := m.files[m.fileIdx]
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("File Preview: ") + fileStyle.Render(file))
+	b.WriteString("\n\n")
+	
+	// Show a snippet of the diff
+	lines := m.diffLines
+	if m.diffMode == diffSplit {
+		lines = splitDiff(lines, m.width)
+	}
+	
+	previewLines := 5
+	for i := 0; i < min(len(lines), previewLines); i++ {
+		b.WriteString(truncateStyledDiffLine(lines[i], m.width-4))
+		b.WriteByte('\n')
+	}
+	if len(lines) > previewLines {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ... %d more lines (press Enter/l for full diff)", len(lines)-previewLines)))
+		b.WriteByte('\n')
+	}
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color("8")).
+		Padding(0, 1).
+		Width(m.width)
+	
+	return style.Render(b.String())
 }
 
 func (m model) viewBody(content string, height int, focusLine int) string {
@@ -356,38 +455,6 @@ func (m model) fileFocusLine() int {
 	return 2 + m.fileIdx
 }
 
-func (m model) viewCommits() string {
-	if m.width >= 100 {
-		return m.viewCommitsWithPreview()
-	}
-	var b strings.Builder
-	for i, commit := range m.commits {
-		line := fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
-		if i == m.commitIdx {
-			line = cursorStyle.Render(line)
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-		for _, req := range m.links[commit.Hash] {
-			b.WriteString(markerStyle.Render("└─ ●"))
-			b.WriteByte(' ')
-			b.WriteString(providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)))
-			b.WriteByte(' ')
-			b.WriteString(requestStyle.Render(req.Message))
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
-}
-
-func (m model) viewCommitsWithPreview() string {
-	leftWidth := max(44, m.width/2)
-	rightWidth := max(30, m.width-leftWidth-3)
-	leftLines := strings.Split(strings.TrimRight(m.viewCommitsList(leftWidth), "\n"), "\n")
-	rightLines := strings.Split(strings.TrimRight(m.viewCommitFilePreview(rightWidth), "\n"), "\n")
-	return joinColumns(leftLines, rightLines, leftWidth)
-}
-
 func (m model) viewCommitsList(width int) string {
 	var b strings.Builder
 	for i, commit := range m.commits {
@@ -398,9 +465,10 @@ func (m model) viewCommitsList(width int) string {
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
-		for _, req := range m.links[commit.Hash] {
-			reqLine := fmt.Sprintf("%s [%s %s] %s", markerStyle.Render("└─ ●"), req.AgentName, req.Model, req.Message)
-			b.WriteString(truncateVisible(reqLine, width))
+		// In list view, we still show a short marker if it has requests
+		if len(m.links[commit.Hash]) > 0 {
+			b.WriteString(markerStyle.Render("  ● "))
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("%d requests", len(m.links[commit.Hash]))))
 			b.WriteByte('\n')
 		}
 	}
@@ -432,47 +500,11 @@ func (m model) viewCommitFilePreview(width int) string {
 	return b.String()
 }
 
-func (m model) viewFiles() string {
-	if m.width >= 100 {
-		return m.viewFilesWithPreview()
-	}
-	var b strings.Builder
-	if len(m.commits) == 0 {
-		return ""
-	}
-	commit := m.commits[m.commitIdx]
-	b.WriteString(hashStyle.Render(commit.ShortHash))
-	b.WriteByte(' ')
-	b.WriteString(commit.Subject)
-	b.WriteString("\n\n")
-	for i, file := range m.files {
-		line := fileStyle.Render(file)
-		if i == m.fileIdx {
-			line = cursorStyle.Render(line)
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func (m model) viewFilesWithPreview() string {
-	leftWidth := max(32, m.width/3)
-	rightWidth := max(40, m.width-leftWidth-3)
-	leftLines := strings.Split(strings.TrimRight(m.viewFilesList(leftWidth), "\n"), "\n")
-	rightLines := strings.Split(strings.TrimRight(m.viewSelectedDiffPreview(rightWidth), "\n"), "\n")
-	return joinColumns(leftLines, rightLines, leftWidth)
-}
-
 func (m model) viewFilesList(width int) string {
 	var b strings.Builder
 	if len(m.commits) == 0 {
 		return ""
 	}
-	commit := m.commits[m.commitIdx]
-	header := fmt.Sprintf("%s %s", hashStyle.Render(commit.ShortHash), commit.Subject)
-	b.WriteString(truncateVisible(header, width))
-	b.WriteString("\n\n")
 	for i, file := range m.files {
 		line := fileStyle.Render(file)
 		if i == m.fileIdx {
