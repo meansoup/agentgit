@@ -646,15 +646,7 @@ type codexHookHandler struct {
 }
 
 func commitMessage(req store.Request) string {
-	message := strings.TrimSpace(req.Message)
-	if message == "" {
-		message = "agent request"
-	}
-	message = strings.ReplaceAll(message, "\n", " ")
-	if len(message) > 80 {
-		message = message[:80]
-	}
-	return fmt.Sprintf("agentgit(%s): %s", req.AgentName, message)
+	return "agent update"
 }
 
 func shellQuote(s string) string {
