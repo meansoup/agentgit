@@ -24,6 +24,7 @@ const (
 	modeFiles
 	modeDiff
 	modeFullFile
+	modeRequest
 )
 
 type diffMode int
@@ -165,6 +166,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "f":
 			m.toggleFullFile()
+		case "r":
+			m.toggleRequestFull()
 		case "n":
 			m.jumpHunk(1)
 		case "p":
@@ -195,6 +198,8 @@ func (m model) contentView() (string, int) {
 		return m.viewDiff(), 2
 	case modeFullFile:
 		return m.viewFullFile(), 2
+	case modeRequest:
+		return m.viewRequestFull(), 2
 	default:
 		return "", 0
 	}
@@ -205,10 +210,9 @@ func (m model) viewFrame(content string, focusLine int) string {
 	footer := footerStyle.Width(m.width).Render(m.helpText())
 	
 	var staticTop string
-	switch m.mode {
-	case modeCommits:
+	if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
-	case modeFiles:
+	} else if m.mode == modeFiles {
 		staticTop = m.viewFileDetailsPreview()
 	}
 
@@ -333,13 +337,15 @@ func (m model) viewBody(content string, height int, focusLine int) string {
 func (m model) helpText() string {
 	switch m.mode {
 	case modeCommits:
-		return "j/k move  enter/l files  q quit"
+		return "j/k move  enter/l files  r request  q quit"
 	case modeFiles:
 		return "j/k move  enter/l diff  h back  q quit"
 	case modeDiff:
 		return "j/k scroll  n/p hunk  m split/unified  f full  h back  q quit"
 	case modeFullFile:
 		return "j/k scroll  f diff  h back  q quit"
+	case modeRequest:
+		return "j/k scroll  r back  h back  q quit"
 	default:
 		return "q quit"
 	}
@@ -353,7 +359,7 @@ func (m *model) move(delta int) {
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
 		m.loadSelectedDiff()
-	case modeDiff, modeFullFile:
+	case modeDiff, modeFullFile, modeRequest:
 		m.scroll = max(0, m.scroll+delta)
 	}
 }
@@ -420,11 +426,58 @@ func (m *model) enter() {
 
 func (m *model) back() {
 	switch m.mode {
-	case modeDiff, modeFullFile:
+	case modeDiff, modeFullFile, modeRequest:
 		m.mode = modeFiles
 	case modeFiles:
 		m.mode = modeCommits
 	}
+}
+
+func (m *model) toggleRequestFull() {
+	if m.mode == modeCommits {
+		m.mode = modeRequest
+		m.scroll = 0
+	} else if m.mode == modeRequest {
+		m.mode = modeCommits
+		m.scroll = 0
+	}
+}
+
+func (m model) viewRequestFull() string {
+	if len(m.commits) == 0 {
+		return ""
+	}
+	commit := m.commits[m.commitIdx]
+	var b strings.Builder
+	
+	b.WriteString(titleStyle.Render("Full Request Details"))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
+	b.WriteString("\n\n")
+	
+	requests := m.links[commit.Hash]
+	if len(requests) == 0 {
+		b.WriteString(mutedStyle.Render("No requests found for this commit."))
+	} else {
+		for i, req := range requests {
+			if i > 0 {
+				b.WriteString("\n" + mutedStyle.Render(strings.Repeat("─", m.width-4)) + "\n\n")
+			}
+			b.WriteString(markerStyle.Render(fmt.Sprintf("Request %d:", i+1)))
+			b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("  %s: %s\n", mutedStyle.Render("Agent"), providerStyle.Render(req.AgentName)))
+			b.WriteString(fmt.Sprintf("  %s: %s\n", mutedStyle.Render("Model"), providerStyle.Render(req.Model)))
+			b.WriteString("\n")
+			b.WriteString(requestStyle.Render(req.Message))
+			b.WriteString("\n")
+		}
+	}
+	
+	lines := splitViewLines(b.String())
+	if m.scroll >= len(lines) {
+		m.scroll = max(0, len(lines)-1)
+	}
+	return strings.Join(lines[m.scroll:], "\n")
 }
 
 func (m *model) toggleFullFile() {
