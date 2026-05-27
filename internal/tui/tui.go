@@ -154,6 +154,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.move(-1)
 		case "down", "j":
 			m.move(1)
+		case "pgup":
+			m.page(-1)
+		case "pgdown":
+			m.page(1)
 		case "right", "l", "enter":
 			m.enter()
 		case "left", "h", "backspace":
@@ -208,7 +212,7 @@ func (m model) contentView() (string, int) {
 func (m model) viewFrame(content string, focusLine int) string {
 	header := headerStyle.Width(m.width).Render(fmt.Sprintf("agentgit  %s  diff:%s", m.modeName(), m.diffModeName()))
 	footer := footerStyle.Width(m.width).Render(m.helpText())
-	
+
 	var staticTop string
 	if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
@@ -219,10 +223,10 @@ func (m model) viewFrame(content string, focusLine int) string {
 	topHeight := lipgloss.Height(staticTop)
 	headerHeight := lipgloss.Height(header)
 	footerHeight := lipgloss.Height(footer)
-	
+
 	bodyHeight := max(0, m.height-headerHeight-footerHeight-topHeight)
 	body := m.viewBody(content, bodyHeight, focusLine)
-	
+
 	res := header + "\n"
 	if staticTop != "" {
 		res += staticTop + "\n"
@@ -237,13 +241,13 @@ func (m model) viewCommitDetailsPreview() string {
 	}
 	commit := m.commits[m.commitIdx]
 	var b strings.Builder
-	
+
 	// Commit Header
 	b.WriteString(titleStyle.Render("Commit Details"))
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
 	b.WriteString("\n\n")
-	
+
 	// Request Messages (Full)
 	requests := m.links[commit.Hash]
 	if len(requests) > 0 {
@@ -256,7 +260,7 @@ func (m model) viewCommitDetailsPreview() string {
 		}
 		b.WriteString("\n")
 	}
-	
+
 	// Changed Files Summary
 	files := m.fileCache[commit.Hash]
 	if len(files) > 0 {
@@ -270,14 +274,14 @@ func (m model) viewCommitDetailsPreview() string {
 		}
 		b.WriteString("\n")
 	}
-	
+
 	style := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), false, false, true, false).
 		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
 		Width(m.width)
-	
-	return style.Render(b.String())
+
+	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press r for full request"))
 }
 
 func (m model) viewFileDetailsPreview() string {
@@ -288,13 +292,13 @@ func (m model) viewFileDetailsPreview() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("File Preview: ") + fileStyle.Render(file))
 	b.WriteString("\n\n")
-	
+
 	// Show a snippet of the diff
 	lines := m.diffLines
 	if m.diffMode == diffSplit {
 		lines = splitDiff(lines, m.width)
 	}
-	
+
 	previewLines := 5
 	for i := 0; i < min(len(lines), previewLines); i++ {
 		b.WriteString(truncateStyledDiffLine(lines[i], m.width-4))
@@ -310,7 +314,7 @@ func (m model) viewFileDetailsPreview() string {
 		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
 		Width(m.width)
-	
+
 	return style.Render(b.String())
 }
 
@@ -334,6 +338,30 @@ func (m model) viewBody(content string, height int, focusLine int) string {
 	return strings.Join(visible, "\n")
 }
 
+func (m model) commitPreviewInnerHeight() int {
+	if m.height <= 0 {
+		return 8
+	}
+	return clamp(m.height/4, 5, 10)
+}
+
+func (m model) fitPreviewContent(content string, height int, overflow string) string {
+	lines := splitViewLines(content)
+	contentWidth := max(0, m.width-2)
+	overflowLine := mutedStyle.Render(overflow)
+	if len(lines) > height && height > 0 {
+		lines = append([]string(nil), lines[:height]...)
+		lines[height-1] = overflowLine
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		lines[i] = padPlain(truncateVisible(line, contentWidth), contentWidth)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m model) helpText() string {
 	switch m.mode {
 	case modeCommits:
@@ -341,11 +369,11 @@ func (m model) helpText() string {
 	case modeFiles:
 		return "j/k move  enter/l diff  h back  q quit"
 	case modeDiff:
-		return "j/k scroll  n/p hunk  m split/unified  f full  h back  q quit"
+		return "j/k scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  h back  q quit"
 	case modeFullFile:
-		return "j/k scroll  f diff  h back  q quit"
+		return "j/k scroll  pgup/pgdown page  f diff  h back  q quit"
 	case modeRequest:
-		return "j/k scroll  r back  h back  q quit"
+		return "j/k scroll  pgup/pgdown page  r back  h back  q quit"
 	default:
 		return "q quit"
 	}
@@ -362,6 +390,23 @@ func (m *model) move(delta int) {
 	case modeDiff, modeFullFile, modeRequest:
 		m.scroll = max(0, m.scroll+delta)
 	}
+}
+
+func (m *model) page(delta int) {
+	switch m.mode {
+	case modeDiff, modeFullFile, modeRequest:
+		m.scroll = max(0, m.scroll+delta*m.pageSize())
+	}
+}
+
+func (m model) pageSize() int {
+	if m.height <= 0 {
+		return 20
+	}
+	headerHeight := 1
+	footerHeight := 1
+	contentHeaderHeight := 2
+	return max(1, m.height-headerHeight-footerHeight-contentHeaderHeight)
 }
 
 func (m *model) jumpHunk(delta int) {
@@ -449,12 +494,12 @@ func (m model) viewRequestFull() string {
 	}
 	commit := m.commits[m.commitIdx]
 	var b strings.Builder
-	
+
 	b.WriteString(titleStyle.Render("Full Request Details"))
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
 	b.WriteString("\n\n")
-	
+
 	requests := m.links[commit.Hash]
 	if len(requests) == 0 {
 		b.WriteString(mutedStyle.Render("No requests found for this commit."))
@@ -472,7 +517,7 @@ func (m model) viewRequestFull() string {
 			b.WriteString("\n")
 		}
 	}
-	
+
 	lines := splitViewLines(b.String())
 	if m.scroll >= len(lines) {
 		m.scroll = max(0, len(lines)-1)
@@ -715,7 +760,7 @@ func highlightDiff(filename string, lines []string) []string {
 	// or try to highlight blocks. For simplicity, we'll highlight line by line
 	// if it's code. But chroma works better on blocks.
 	// Let's try to identify code lines and highlight them.
-	
+
 	result := make([]string, len(lines))
 	for i, line := range lines {
 		if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ') {
@@ -865,12 +910,12 @@ func takeVisible(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	// We need to handle ANSI codes. A simple way is to use lipgloss's internal 
+	// We need to handle ANSI codes. A simple way is to use lipgloss's internal
 	// or similar logic, but we can iterate and check width at each step.
 	// Note: This is a bit slow but correct for small strings.
 	var b strings.Builder
 	var visibleWidth int
-	
+
 	runes := []rune(s)
 	for i := 0; i < len(runes); i++ {
 		// If we encounter an escape sequence, we should include it without counting its width.
@@ -882,7 +927,7 @@ func takeVisible(s string, width int) string {
 			}
 			continue
 		}
-		
+
 		charWidth := lipgloss.Width(string(runes[i]))
 		if visibleWidth+charWidth > width {
 			break
