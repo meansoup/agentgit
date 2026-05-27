@@ -55,19 +55,23 @@ type model struct {
 }
 
 var (
-	hashStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	providerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	requestStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	markerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	fileStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	addStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	delStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	hunkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	cursorStyle   = lipgloss.NewStyle().Reverse(true)
-	titleStyle    = lipgloss.NewStyle().Bold(true)
-	headerStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
-	footerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
-	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	hashStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	providerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	requestStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	addStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	delStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	cursorStyle    = lipgloss.NewStyle().Reverse(true)
+	titleStyle     = lipgloss.NewStyle().Bold(true)
+	headerStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
+	footerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
+	statusStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
+	statusAltStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
+	keyStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
+	helpStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
+	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
 func Run(root string, limit int) error {
@@ -210,8 +214,8 @@ func (m model) contentView() (string, int) {
 }
 
 func (m model) viewFrame(content string, focusLine int) string {
-	header := headerStyle.Width(m.width).Render(fmt.Sprintf("agentgit  %s  diff:%s", m.modeName(), m.diffModeName()))
-	footer := footerStyle.Width(m.width).Render(m.helpText())
+	header := m.viewHeader()
+	footer := m.viewFooter()
 
 	var staticTop string
 	if m.mode == modeCommits {
@@ -233,6 +237,10 @@ func (m model) viewFrame(content string, focusLine int) string {
 	}
 	res += body + "\n" + footer
 	return res
+}
+
+func (m model) viewHeader() string {
+	return headerStyle.Width(m.width).Render(fmt.Sprintf("agentgit  %s  diff:%s", m.modeName(), m.diffModeName()))
 }
 
 func (m model) viewCommitDetailsPreview() string {
@@ -376,6 +384,71 @@ func (m model) helpText() string {
 		return "j/k scroll  pgup/pgdown page  r back  h back  q quit"
 	default:
 		return "q quit"
+	}
+}
+
+type shortcut struct {
+	keys   string
+	action string
+}
+
+func (m model) viewFooter() string {
+	status := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		statusStyle.Render(strings.ToUpper(m.modeName())),
+		statusAltStyle.Render("diff:"+m.diffModeName()),
+	)
+	line := status
+	for _, item := range m.shortcuts() {
+		line += "  " + keyStyle.Render(item.keys) + " " + helpStyle.Render(item.action)
+	}
+	return footerStyle.Width(m.width).Render(truncateVisible(line, max(0, m.width-2)))
+}
+
+func (m model) shortcuts() []shortcut {
+	switch m.mode {
+	case modeCommits:
+		return []shortcut{
+			{"j/k", "move"},
+			{"enter/l", "files"},
+			{"r", "request"},
+			{"q", "quit"},
+		}
+	case modeFiles:
+		return []shortcut{
+			{"j/k", "move"},
+			{"enter/l", "diff"},
+			{"h", "back"},
+			{"q", "quit"},
+		}
+	case modeDiff:
+		return []shortcut{
+			{"j/k", "scroll"},
+			{"pgup/pgdn", "page"},
+			{"n/p", "hunk"},
+			{"m", "mode"},
+			{"f", "full"},
+			{"h", "back"},
+			{"q", "quit"},
+		}
+	case modeFullFile:
+		return []shortcut{
+			{"j/k", "scroll"},
+			{"pgup/pgdn", "page"},
+			{"f", "diff"},
+			{"h", "back"},
+			{"q", "quit"},
+		}
+	case modeRequest:
+		return []shortcut{
+			{"j/k", "scroll"},
+			{"pgup/pgdn", "page"},
+			{"r", "back"},
+			{"h", "back"},
+			{"q", "quit"},
+		}
+	default:
+		return []shortcut{{"q", "quit"}}
 	}
 }
 
@@ -951,6 +1024,10 @@ func (m model) modeName() string {
 		return "files"
 	case modeDiff:
 		return "diff"
+	case modeFullFile:
+		return "full"
+	case modeRequest:
+		return "request"
 	default:
 		return "commits"
 	}
