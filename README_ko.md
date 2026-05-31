@@ -1,6 +1,6 @@
 # agentgit
 
-**agentgit**은 AI 코딩 에이전트의 요청(Request)과 Git 커밋을 연결해주는 도구입니다. 기존처럼 에이전트(`codex`, `gemini`)를 사용하면, `agentgit`이 백그라운드에서 요청 내용을 기록하고 변경 사항을 자동으로 커밋하여 TUI 브라우저로 보여줍니다.
+**agentgit**은 AI 코딩 에이전트의 요청(Request)과 Git 커밋을 연결해주는 도구입니다. 기존처럼 에이전트(`codex`, `gemini`)를 사용하면, `agentgit`이 백그라운드에서 요청 내용을 기록하고 생성된 커밋을 TUI 브라우저로 보여줍니다.
 
 [English Docs (README.md)](./README.md)
 
@@ -39,7 +39,7 @@
 ## 동작 방식
 
 - **훅(Hooks)**: `agentgit setup`은 에이전트 이벤트가 발생할 때 실행되는 라이프사이클 훅을 설치합니다.
-- **자동 커밋**: 에이전트가 파일을 수정하면, `agentgit`이 해당 요청에 의한 변경분만 따로 커밋합니다.
+- **커밋 연결**: 에이전트 요청 중 생성된 커밋을 해당 요청에 연결하며, `agentgit`이 커밋을 만들거나 커밋 메시지를 바꾸지 않습니다.
 - **로컬 DB**: 모든 메타데이터는 `~/.local/share/agentgit/agentgit.sqlite3`에 저장됩니다.
 - **투명성**: 기존 작업 방식은 그대로 유지됩니다. `agentgit`은 보이지 않는 곳에서 조용히 작동합니다.
 

@@ -331,7 +331,7 @@ func installGeminiSettingsHooks(settingsPath, runner string) error {
 	var settings map[string]interface{}
 	if raw, err := os.ReadFile(settingsPath); err == nil {
 		if err := json.Unmarshal(raw, &settings); err != nil {
-			// If invalid JSON, start fresh or return error? 
+			// If invalid JSON, start fresh or return error?
 			// Better return error if it's corrupted but not empty.
 			return fmt.Errorf("parse %s: %w", settingsPath, err)
 		}
@@ -351,7 +351,7 @@ func installGeminiSettingsHooks(settingsPath, runner string) error {
 
 	addGeminiHook := func(eventName string) {
 		groups, _ := hooks[eventName].([]interface{})
-		
+
 		// Find existing group with matcher "*" and our hook
 		var targetGroup map[string]interface{}
 		for _, g := range groups {
@@ -374,7 +374,7 @@ func installGeminiSettingsHooks(settingsPath, runner string) error {
 		}
 
 		hookList, _ := targetGroup["hooks"].([]interface{})
-		
+
 		// Remove existing agentgit hooks
 		newHookList := []interface{}{}
 		for _, h := range hookList {
@@ -495,12 +495,12 @@ func handleGeminiBeforeAgent(input geminiHookInput, root string) error {
 	head, _ := git.Head(root)
 	// For Gemini, we don't have an explicit TurnID in the hook input yet.
 	// We'll use SessionID as TurnID or generate one if needed.
-	// Using SessionID as TurnID for now as they are often 1:1 in turns? 
+	// Using SessionID as TurnID for now as they are often 1:1 in turns?
 	// Actually, we should probably use a turn counter or something if possible.
 	// But let's see if we can use transcript path or something to distinguish turns.
-	// For now, let's just use SessionID and accept it might overwrite if multiple turns happen 
+	// For now, let's just use SessionID and accept it might overwrite if multiple turns happen
 	// without AfterAgent finishing? No, CreateOrUpdateRequest will just find it.
-	
+
 	// Better: Use SessionID and if we can't find TurnID, we use a hash of the prompt?
 	turnID := input.TurnID
 	if turnID == "" {
@@ -531,26 +531,6 @@ func handleGeminiAfterAgent(input geminiHookInput, root string) error {
 	if err != nil || !ok {
 		return err
 	}
-	current, err := git.StatusPaths(root)
-	if err != nil {
-		return err
-	}
-	owned := map[string]bool{}
-	for path := range current {
-		if !req.BaselinePaths[path] {
-			owned[path] = true
-		}
-	}
-	if len(owned) > 0 {
-		commitHash, err := git.CommitPaths(root, owned, commitMessage(req))
-		if err != nil {
-			return err
-		}
-		if err := store.LinkCommit(req.ID, commitHash, root); err != nil {
-			return err
-		}
-		return store.FinishRequest(req.ID)
-	}
 	hashes, err := git.CommitsAfter(root, req.BaselineHead)
 	if err != nil {
 		return err
@@ -565,7 +545,7 @@ func handleGeminiAfterAgent(input geminiHookInput, root string) error {
 
 type geminiHookInput struct {
 	SessionID      string `json:"session_id"`
-	TranscriptPath  string `json:"transcript_path"`
+	TranscriptPath string `json:"transcript_path"`
 	CWD            string `json:"cwd"`
 	HookEventName  string `json:"hook_event_name"`
 	Model          string `json:"model"`
@@ -589,26 +569,6 @@ func handleCodexStop(input codexHookInput, root string) error {
 	req, ok, err := store.FindRequest("codex", input.SessionID, input.TurnID)
 	if err != nil || !ok {
 		return err
-	}
-	current, err := git.StatusPaths(root)
-	if err != nil {
-		return err
-	}
-	owned := map[string]bool{}
-	for path := range current {
-		if !req.BaselinePaths[path] {
-			owned[path] = true
-		}
-	}
-	if len(owned) > 0 {
-		commitHash, err := git.CommitPaths(root, owned, commitMessage(req))
-		if err != nil {
-			return err
-		}
-		if err := store.LinkCommit(req.ID, commitHash, root); err != nil {
-			return err
-		}
-		return store.FinishRequest(req.ID)
 	}
 	hashes, err := git.CommitsAfter(root, req.BaselineHead)
 	if err != nil {
@@ -643,10 +603,6 @@ type codexHookHandler struct {
 	Command       string `json:"command"`
 	Timeout       int    `json:"timeout,omitempty"`
 	StatusMessage string `json:"statusMessage,omitempty"`
-}
-
-func commitMessage(req store.Request) string {
-	return "agent update"
 }
 
 func shellQuote(s string) string {

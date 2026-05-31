@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -162,44 +161,4 @@ func CatFile(root string, commitHash string, path string) (string, error) {
 		return "", err
 	}
 	return out, nil
-}
-
-func CommitPaths(root string, paths map[string]bool, message string) (string, error) {
-	if len(paths) == 0 {
-		return "", errors.New("no request-owned file changes to commit")
-	}
-	var existing []string
-	var deleted []string
-	for path := range paths {
-		if _, err := os.Stat(filepath.Join(root, path)); err == nil {
-			existing = append(existing, path)
-		} else if os.IsNotExist(err) {
-			out := RunAllowError(root, "ls-files", "--deleted", "--", path)
-			if strings.TrimSpace(out) != "" {
-				deleted = append(deleted, path)
-			}
-		} else {
-			return "", err
-		}
-	}
-	if len(existing) > 0 {
-		args := append([]string{"add", "--"}, existing...)
-		if _, err := Run(root, args...); err != nil {
-			return "", err
-		}
-	}
-	if len(deleted) > 0 {
-		args := append([]string{"add", "-u", "--"}, deleted...)
-		if _, err := Run(root, args...); err != nil {
-			return "", err
-		}
-	}
-	if _, err := Run(root, "commit", "-m", message); err != nil {
-		return "", err
-	}
-	out, err := Run(root, "rev-parse", "HEAD")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
 }

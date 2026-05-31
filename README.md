@@ -1,6 +1,6 @@
 # agentgit
 
-**agentgit** bridges AI coding agent requests with Git commits. Use your agent CLI (`codex`, `gemini`) as usual; `agentgit` automatically captures requests, commits file changes, and links them in a local TUI browser.
+**agentgit** bridges AI coding agent requests with Git commits. Use your agent CLI (`codex`, `gemini`) as usual; `agentgit` automatically captures requests and links commits in a local TUI browser.
 
 [한국어 문서 (README_ko.md)](./README_ko.md)
 
@@ -39,7 +39,7 @@
 ## How It Works
 
 - **Hooks**: `agentgit setup` installs lifecycle hooks that trigger on agent events.
-- **Auto-Commit**: When an agent modifies files, `agentgit` creates a request-scoped commit for those specific changes.
+- **Commit Linking**: When commits are created during an agent request, `agentgit` links them to that request without creating commits or changing commit messages.
 - **Local DB**: Metadata is stored in `~/.local/share/agentgit/agentgit.sqlite3`.
 - **Transparency**: Your existing workflow remains unchanged. `agentgit` works silently in the background.
 

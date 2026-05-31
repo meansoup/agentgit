@@ -88,8 +88,8 @@ Expected behavior:
 
 - Codex runs normally.
 - Agentgit receives Codex hook events.
-- If a Codex request modifies files in a Git repository, agentgit creates a
-  request-scoped commit for only those files.
+- If a Codex request creates commits in a Git repository, agentgit links those
+  commits to the request.
 - Agentgit records the request, agent name, model, session id, turn id, commit
   id, repository root, and timestamps in the local database.
 - `agentgit` shows the current repository's commit list with linked request rows.
@@ -131,19 +131,17 @@ integrate through each tool's hook/config system.
   - Git repository root, when available
   - dirty-file baseline
   - current `HEAD`
-- On request stop/completion, agentgit must determine whether request-owned
-  files changed.
+- On request stop/completion, agentgit must detect commits created after the
+  request baseline `HEAD`.
 
-### 3. Request-Scoped Commit Creation
+### 3. Request-Scoped Commit Linking
 
-- If a request changes files in a Git repository, agentgit must commit those
-  changed files as a request-scoped commit.
-- Files already dirty before the request must not be included in the request
-  commit.
-- If a commit was already created during the request, agentgit must link commits
-  created after the request baseline `HEAD`.
+- If commits are created during the request, agentgit must link commits created
+  after the request baseline `HEAD`.
+- agentgit must not create commits or modify commit messages.
 - If no Git repository is present, agentgit must not create a commit.
-- If no request-owned changes exist, agentgit must not create an empty commit.
+- If no commits are created during the request, agentgit must not create an
+  empty commit.
 
 ### 4. Local Database
 
@@ -226,8 +224,8 @@ TUI navigation:
 
 - A user installs agentgit, runs `agentgit setup codex`, then continues using
   `codex` directly.
-- A Codex request that changes files in a Git repo produces a request-scoped
-  commit.
+- A Codex request that creates commits in a Git repo links those commits to the
+  request.
 - The request and commit are linked in the local database.
 - `agentgit` shows the linked request under the matching commit.
 - `agentgit <file_path>` works from a file path.
@@ -244,7 +242,7 @@ Implemented:
 - local SQLite storage
 - provider-neutral schema extensions such as `agent_name`, `session_id`,
   `turn_id`, and `baseline_head`
-- request-scoped commit creation from Codex hook events
+- request-scoped commit linking from Codex hook events
 - commit/request TUI with file and diff drill-down
 - macOS and Linux release builds
 
