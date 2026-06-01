@@ -17,6 +17,14 @@ type Commit struct {
 }
 
 func Run(cwd string, args ...string) (string, error) {
+	out, err := RunBytes(cwd, args...)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func RunBytes(cwd string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -33,9 +41,9 @@ func Run(cwd string, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", errors.New(msg)
+		return nil, errors.New(msg)
 	}
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
 }
 
 func RunAllowError(cwd string, args ...string) string {
@@ -156,9 +164,13 @@ func UnifiedDiff(root string, commitHash string, path string) ([]string, error) 
 }
 
 func CatFile(root string, commitHash string, path string) (string, error) {
-	out, err := Run(root, "show", commitHash+":"+path)
+	out, err := CatFileBytes(root, commitHash, path)
 	if err != nil {
 		return "", err
 	}
-	return out, nil
+	return string(out), nil
+}
+
+func CatFileBytes(root string, commitHash string, path string) ([]byte, error) {
+	return RunBytes(root, "show", commitHash+":"+path)
 }

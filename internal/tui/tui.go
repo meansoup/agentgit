@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -52,6 +55,10 @@ type model struct {
 	width     int
 	height    int
 	err       error
+}
+
+type imageOpenMsg struct {
+	err error
 }
 
 var (
@@ -162,8 +169,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.page(-1)
 		case "pgdown":
 			m.page(1)
-		case "right", "l", "enter":
-			m.enter()
+		case "right", "l":
+			return m, m.enter(false)
+		case "enter":
+			return m, m.enter(true)
 		case "left", "h", "backspace":
 			m.back()
 		case "m":
@@ -180,6 +189,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.jumpHunk(1)
 		case "p":
 			m.jumpHunk(-1)
+		}
+	case imageOpenMsg:
+		if msg.err != nil {
+			m.err = msg.err
 		}
 	}
 	return m, nil
@@ -300,6 +313,12 @@ func (m model) viewFileDetailsPreview() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("File Preview: ") + fileStyle.Render(file))
 	b.WriteString("\n\n")
+	if m.selectedFileIsImage() {
+		b.WriteString(markerStyle.Render("Image file"))
+		b.WriteByte('\n')
+		b.WriteString(mutedStyle.Render("  press Enter to open image, l for diff"))
+		b.WriteString("\n\n")
+	}
 
 	// Show a snippet of the diff
 	lines := m.diffLines
@@ -313,7 +332,11 @@ func (m model) viewFileDetailsPreview() string {
 		b.WriteByte('\n')
 	}
 	if len(lines) > previewLines {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ... %d more lines (press Enter/l for full diff)", len(lines)-previewLines)))
+		diffKeys := "Enter/l"
+		if m.selectedFileIsImage() {
+			diffKeys = "l"
+		}
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ... %d more lines (press %s for full diff)", len(lines)-previewLines, diffKeys)))
 		b.WriteByte('\n')
 	}
 
@@ -346,6 +369,22 @@ func (m model) viewBody(content string, height int, focusLine int) string {
 	return strings.Join(visible, "\n")
 }
 
+func (m model) selectedFileIsImage() bool {
+	if len(m.files) == 0 || m.fileIdx < 0 || m.fileIdx >= len(m.files) {
+		return false
+	}
+	return isImagePath(m.files[m.fileIdx])
+}
+
+func isImagePath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".avif", ".bmp", ".gif", ".heic", ".heif", ".ico", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m model) commitPreviewInnerHeight() int {
 	if m.height <= 0 {
 		return 8
@@ -375,6 +414,9 @@ func (m model) helpText() string {
 	case modeCommits:
 		return "j/k move  enter/l files  r request  q quit"
 	case modeFiles:
+		if m.selectedFileIsImage() {
+			return "j/k move  enter image  l diff  h back  q quit"
+		}
 		return "j/k move  enter/l diff  h back  q quit"
 	case modeDiff:
 		return "j/k scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  h back  q quit"
@@ -415,12 +457,13 @@ func (m model) shortcuts() []shortcut {
 			{"q", "quit"},
 		}
 	case modeFiles:
-		return []shortcut{
-			{"j/k", "move"},
-			{"enter/l", "diff"},
-			{"h", "back"},
-			{"q", "quit"},
+		items := []shortcut{{"j/k", "move"}}
+		if m.selectedFileIsImage() {
+			items = append(items, shortcut{"enter", "image"}, shortcut{"l", "diff"})
+		} else {
+			items = append(items, shortcut{"enter/l", "diff"})
 		}
+		return append(items, shortcut{"h", "back"}, shortcut{"q", "quit"})
 	case modeDiff:
 		return []shortcut{
 			{"j/k", "scroll"},
@@ -515,15 +558,15 @@ func (m *model) jumpHunk(delta int) {
 	m.scroll = hunks[0]
 }
 
-func (m *model) enter() {
+func (m *model) enter(openImages bool) tea.Cmd {
 	switch m.mode {
 	case modeCommits:
 		if len(m.commits) == 0 {
-			return
+			return nil
 		}
 		m.loadCommitFiles()
 		if m.err != nil {
-			return
+			return nil
 		}
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
@@ -531,15 +574,19 @@ func (m *model) enter() {
 		m.mode = modeFiles
 	case modeFiles:
 		if len(m.files) == 0 {
-			return
+			return nil
+		}
+		if openImages && m.selectedFileIsImage() {
+			return m.openSelectedImage()
 		}
 		m.loadSelectedDiff()
 		if m.err != nil {
-			return
+			return nil
 		}
 		m.scroll = 0
 		m.mode = modeDiff
 	}
+	return nil
 }
 
 func (m *model) back() {
@@ -776,6 +823,65 @@ func (m *model) loadFullFile() {
 	lines := Highlight(path, content)
 	m.fullCache[key] = lines
 	m.fullLines = lines
+}
+
+func (m *model) openSelectedImage() tea.Cmd {
+	if len(m.commits) == 0 || len(m.files) == 0 {
+		return nil
+	}
+	hash := m.commits[m.commitIdx].Hash
+	path := m.files[m.fileIdx]
+	data, err := git.CatFileBytes(m.root, hash, path)
+	if err != nil {
+		m.err = err
+		return nil
+	}
+	temp, err := os.CreateTemp("", "agentgit-"+shortHash(hash)+"-*"+strings.ToLower(filepath.Ext(path)))
+	if err != nil {
+		m.err = err
+		return nil
+	}
+	tempPath := temp.Name()
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		m.err = err
+		return nil
+	}
+	if err := temp.Close(); err != nil {
+		m.err = err
+		return nil
+	}
+	cmd, err := imageOpenCommand(tempPath)
+	if err != nil {
+		m.err = err
+		return nil
+	}
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return imageOpenMsg{err: fmt.Errorf("open image: %w", err)}
+		}
+		return imageOpenMsg{}
+	})
+}
+
+func imageOpenCommand(path string) (*exec.Cmd, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", path), nil
+	case "linux":
+		return exec.Command("xdg-open", path), nil
+	case "windows":
+		return exec.Command("cmd", "/c", "start", "", path), nil
+	default:
+		return nil, fmt.Errorf("opening images is not supported on %s", runtime.GOOS)
+	}
+}
+
+func shortHash(hash string) string {
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func (m *model) loadCommitFiles() {
