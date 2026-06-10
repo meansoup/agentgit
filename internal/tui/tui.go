@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/minkuik/agentgit/internal/git"
 	"github.com/minkuik/agentgit/internal/store"
 
@@ -68,8 +69,6 @@ var (
 	requestStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	addStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	delStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
 	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
 	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
@@ -1072,6 +1071,7 @@ func truncateStyledDiffLine(line string, width int) string {
 }
 
 func renderDiffBackground(style lipgloss.Style, line string, width int) string {
+	line = ansi.Strip(line)
 	if width <= 0 {
 		return style.Render(line)
 	}
@@ -1121,6 +1121,12 @@ func splitDiff(lines []string, width int) []string {
 }
 
 func formatSplit(left, right string, leftWidth, rightWidth int, leftChanged, rightChanged bool) string {
+	if leftChanged {
+		left = ansi.Strip(left)
+	}
+	if rightChanged {
+		right = ansi.Strip(right)
+	}
 	leftCell := padPlain(truncateVisible(left, leftWidth), leftWidth)
 	rightCell := padPlain(truncateVisible(right, rightWidth), rightWidth)
 	if leftChanged {
