@@ -39,6 +39,7 @@ const (
 
 type model struct {
 	root      string
+	limit     int
 	commits   []git.Commit
 	links     map[string][]store.LinkedRequest
 	files     []string
@@ -95,6 +96,7 @@ func Run(root string, limit int) error {
 	}
 	m := model{
 		root:      root,
+		limit:     limit,
 		commits:   commits,
 		links:     links,
 		fileCache: map[string][]string{},
@@ -161,19 +163,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
-		case "up", "k":
+		case "up":
 			m.move(-1)
-		case "down", "j":
+		case "down":
 			m.move(1)
 		case "pgup":
 			m.page(-1)
 		case "pgdown":
 			m.page(1)
-		case "right", "l":
+		case "right":
 			return m, m.enter(false)
 		case "enter":
 			return m, m.enter(true)
-		case "left", "h", "backspace":
+		case "left", "backspace":
 			m.back()
 		case "m":
 			if m.diffMode == diffUnified {
@@ -184,6 +186,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			m.toggleFullFile()
 		case "r":
+			m.refresh()
+		case "v":
 			m.toggleRequestFull()
 		case "n":
 			m.jumpHunk(1)
@@ -302,7 +306,7 @@ func (m model) viewCommitDetailsPreview() string {
 		Padding(0, 1).
 		Width(m.width)
 
-	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press r for full request"))
+	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press v for full request"))
 }
 
 func (m model) viewFileDetailsPreview() string {
@@ -316,7 +320,7 @@ func (m model) viewFileDetailsPreview() string {
 	if m.selectedFileIsImage() {
 		b.WriteString(markerStyle.Render("Image file"))
 		b.WriteByte('\n')
-		b.WriteString(mutedStyle.Render("  press Enter to open image, l for diff"))
+		b.WriteString(mutedStyle.Render("  press Enter to open image, Right for diff"))
 		b.WriteString("\n\n")
 	}
 
@@ -332,9 +336,9 @@ func (m model) viewFileDetailsPreview() string {
 		b.WriteByte('\n')
 	}
 	if len(lines) > previewLines {
-		diffKeys := "Enter/l"
+		diffKeys := "Enter/Right"
 		if m.selectedFileIsImage() {
-			diffKeys = "l"
+			diffKeys = "Right"
 		}
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ... %d more lines (press %s for full diff)", len(lines)-previewLines, diffKeys)))
 		b.WriteByte('\n')
@@ -412,18 +416,18 @@ func (m model) fitPreviewContent(content string, height int, overflow string) st
 func (m model) helpText() string {
 	switch m.mode {
 	case modeCommits:
-		return "j/k move  enter/l files  r request  q quit"
+		return "up/down move  enter/right files  v request  r refresh  q quit"
 	case modeFiles:
 		if m.selectedFileIsImage() {
-			return "j/k move  enter image  l diff  h back  q quit"
+			return "up/down move  enter image  right diff  left/backspace back  r refresh  q quit"
 		}
-		return "j/k move  enter/l diff  h back  q quit"
+		return "up/down move  enter/right diff  left/backspace back  r refresh  q quit"
 	case modeDiff:
-		return "j/k scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  h back  q quit"
+		return "up/down scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  left/backspace back  r refresh  q quit"
 	case modeFullFile:
-		return "j/k scroll  pgup/pgdown page  f diff  h back  q quit"
+		return "up/down scroll  pgup/pgdown page  f diff  left/backspace back  r refresh  q quit"
 	case modeRequest:
-		return "j/k scroll  pgup/pgdown page  r back  h back  q quit"
+		return "up/down scroll  pgup/pgdown page  v back  left/backspace back  r refresh  q quit"
 	default:
 		return "q quit"
 	}
@@ -451,43 +455,47 @@ func (m model) shortcuts() []shortcut {
 	switch m.mode {
 	case modeCommits:
 		return []shortcut{
-			{"j/k", "move"},
-			{"enter/l", "files"},
-			{"r", "request"},
+			{"up/down", "move"},
+			{"enter/right", "files"},
+			{"v", "request"},
+			{"r", "refresh"},
 			{"q", "quit"},
 		}
 	case modeFiles:
-		items := []shortcut{{"j/k", "move"}}
+		items := []shortcut{{"up/down", "move"}}
 		if m.selectedFileIsImage() {
-			items = append(items, shortcut{"enter", "image"}, shortcut{"l", "diff"})
+			items = append(items, shortcut{"enter", "image"}, shortcut{"right", "diff"})
 		} else {
-			items = append(items, shortcut{"enter/l", "diff"})
+			items = append(items, shortcut{"enter/right", "diff"})
 		}
-		return append(items, shortcut{"h", "back"}, shortcut{"q", "quit"})
+		return append(items, shortcut{"left", "back"}, shortcut{"r", "refresh"}, shortcut{"q", "quit"})
 	case modeDiff:
 		return []shortcut{
-			{"j/k", "scroll"},
+			{"up/down", "scroll"},
 			{"pgup/pgdn", "page"},
 			{"n/p", "hunk"},
 			{"m", "mode"},
 			{"f", "full"},
-			{"h", "back"},
+			{"left", "back"},
+			{"r", "refresh"},
 			{"q", "quit"},
 		}
 	case modeFullFile:
 		return []shortcut{
-			{"j/k", "scroll"},
+			{"up/down", "scroll"},
 			{"pgup/pgdn", "page"},
 			{"f", "diff"},
-			{"h", "back"},
+			{"left", "back"},
+			{"r", "refresh"},
 			{"q", "quit"},
 		}
 	case modeRequest:
 		return []shortcut{
-			{"j/k", "scroll"},
+			{"up/down", "scroll"},
 			{"pgup/pgdn", "page"},
-			{"r", "back"},
-			{"h", "back"},
+			{"v", "back"},
+			{"left", "back"},
+			{"r", "refresh"},
 			{"q", "quit"},
 		}
 	default:
@@ -595,6 +603,70 @@ func (m *model) back() {
 		m.mode = modeFiles
 	case modeFiles:
 		m.mode = modeCommits
+	}
+}
+
+func (m *model) refresh() {
+	selectedCommit := ""
+	if len(m.commits) > 0 && m.commitIdx >= 0 && m.commitIdx < len(m.commits) {
+		selectedCommit = m.commits[m.commitIdx].Hash
+	}
+	selectedFile := ""
+	if len(m.files) > 0 && m.fileIdx >= 0 && m.fileIdx < len(m.files) {
+		selectedFile = m.files[m.fileIdx]
+	}
+
+	commits, err := git.Commits(m.root, m.limit)
+	if err != nil {
+		m.err = err
+		return
+	}
+	links, err := store.RequestsByCommit(m.root)
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.commits = commits
+	m.links = links
+	m.fileCache = map[string][]string{}
+	m.diffCache = map[string][]string{}
+	m.fullCache = map[string][]string{}
+	m.diffLines = nil
+	m.fullLines = nil
+	m.scroll = 0
+	m.err = nil
+
+	m.commitIdx = 0
+	for i, commit := range m.commits {
+		if commit.Hash == selectedCommit {
+			m.commitIdx = i
+			break
+		}
+	}
+	m.loadCommitFiles()
+	if len(m.commits) == 0 {
+		m.files = nil
+		m.fileIdx = 0
+		m.mode = modeCommits
+		return
+	}
+	if m.mode != modeCommits && m.mode != modeRequest {
+		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
+		m.fileIdx = 0
+		for i, file := range m.files {
+			if file == selectedFile {
+				m.fileIdx = i
+				break
+			}
+		}
+		if len(m.files) == 0 {
+			m.mode = modeCommits
+			return
+		}
+		m.loadSelectedDiff()
+		if m.mode == modeFullFile {
+			m.loadFullFile()
+		}
 	}
 }
 

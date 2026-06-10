@@ -29,10 +29,12 @@
 
 ## TUI Navigation
 
-- **Move**: `j`/`k` or `Up`/`Down`
-- **Drill down**: `l`, `Right`, or `Enter` (Commit → Files → Diff)
+- **Move**: `Up`/`Down`
+- **Drill down**: `Right` or `Enter` (Commit → Files → Diff)
 - **Open image**: `Enter` on an image file in the file list
-- **Go back**: `h`, `Left`, or `Backspace`
+- **Go back**: `Left` or `Backspace`
+- **Request details**: `v`
+- **Refresh**: `r`
 - **Toggle View**: `m` (Unified/Split diff)
 - **Next/Prev Hunk**: `n`/`p`
 - **Quit**: `q`
