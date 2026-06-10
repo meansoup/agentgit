@@ -33,8 +33,28 @@ func TestSplitDiffStripsNestedANSIFromChangedCells(t *testing.T) {
 	if strings.Contains(got[0], "\x1b[31m") || strings.Contains(got[0], "\x1b[32m") {
 		t.Fatalf("split line retained nested syntax ANSI: %q", got[0])
 	}
-	want := "old                  │ new                 "
+	want := "old        │ new       "
 	if stripped := ansi.Strip(got[0]); stripped != want {
 		t.Fatalf("ansi-stripped split line = %q, want %q", stripped, want)
+	}
+	if width := ansi.StringWidth(ansi.Strip(got[0])); width != 23 {
+		t.Fatalf("split line width = %d, want 23", width)
+	}
+}
+
+func TestSplitDiffFitsNarrowWidths(t *testing.T) {
+	lines := []string{
+		"-old value",
+		"+new value",
+	}
+
+	for _, width := range []int{3, 4, 8, 16} {
+		got := splitDiff(lines, width)
+		if len(got) != 1 {
+			t.Fatalf("splitDiff(%d) returned %d lines, want 1", width, len(got))
+		}
+		if visible := ansi.StringWidth(ansi.Strip(got[0])); visible > width {
+			t.Fatalf("splitDiff(%d) visible width = %d, want <= %d: %q", width, visible, width, got[0])
+		}
 	}
 }

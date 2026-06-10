@@ -836,7 +836,7 @@ func (m model) viewSelectedDiffPreview(width int) string {
 		if i >= limit {
 			break
 		}
-		b.WriteString(truncateStyledDiffLine(line, width))
+		b.WriteString(renderVisibleDiffLine(line, width, m.diffMode == diffSplit))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -856,10 +856,7 @@ func (m model) viewDiff() string {
 		m.scroll = max(0, len(lines)-1)
 	}
 	for _, line := range lines[m.scroll:] {
-		if m.width > 0 {
-			line = truncateVisible(line, m.width)
-		}
-		b.WriteString(styleDiffLine(line, m.width))
+		b.WriteString(renderVisibleDiffLine(line, m.width, m.diffMode == diffSplit))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -1070,6 +1067,20 @@ func truncateStyledDiffLine(line string, width int) string {
 	return styleDiffLine(truncateVisible(line, width), width)
 }
 
+func renderVisibleDiffLine(line string, width int, split bool) string {
+	if !split {
+		return truncateStyledDiffLine(line, width)
+	}
+	switch {
+	case strings.HasPrefix(line, "@@"):
+		return hunkStyle.Render(truncateVisible(line, width))
+	case strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++"):
+		return truncateVisible(line, width)
+	default:
+		return line
+	}
+}
+
 func renderDiffBackground(style lipgloss.Style, line string, width int) string {
 	line = ansi.Strip(line)
 	if width <= 0 {
@@ -1079,8 +1090,7 @@ func renderDiffBackground(style lipgloss.Style, line string, width int) string {
 }
 
 func splitDiff(lines []string, width int) []string {
-	leftWidth := max(20, (width-3)/2)
-	rightWidth := max(20, width-leftWidth-3)
+	leftWidth, rightWidth := splitColumnWidths(width)
 	var out []string
 	var pending *string
 	for _, line := range lines {
@@ -1120,6 +1130,19 @@ func splitDiff(lines []string, width int) []string {
 	return out
 }
 
+func splitColumnWidths(width int) (int, int) {
+	if width <= 0 {
+		width = 120
+	}
+	if width <= 4 {
+		return max(1, width), 0
+	}
+	usable := width - 3
+	leftWidth := max(1, usable/2)
+	rightWidth := max(1, usable-leftWidth)
+	return leftWidth, rightWidth
+}
+
 func formatSplit(left, right string, leftWidth, rightWidth int, leftChanged, rightChanged bool) string {
 	if leftChanged {
 		left = ansi.Strip(left)
@@ -1134,6 +1157,9 @@ func formatSplit(left, right string, leftWidth, rightWidth int, leftChanged, rig
 	}
 	if rightChanged {
 		rightCell = addLineStyle.Render(rightCell)
+	}
+	if rightWidth <= 0 {
+		return leftCell
 	}
 	return leftCell + " │ " + rightCell
 }
