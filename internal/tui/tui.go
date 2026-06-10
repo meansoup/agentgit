@@ -70,6 +70,8 @@ var (
 	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	addStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	delStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
+	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
 	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	cursorStyle    = lipgloss.NewStyle().Reverse(true)
 	titleStyle     = lipgloss.NewStyle().Bold(true)
@@ -858,7 +860,7 @@ func (m model) viewDiff() string {
 		if m.width > 0 {
 			line = truncateVisible(line, m.width)
 		}
-		b.WriteString(styleDiffLine(line))
+		b.WriteString(styleDiffLine(line, m.width))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -1052,12 +1054,12 @@ func (m model) visibleDiffLines() []string {
 	return m.diffLines
 }
 
-func styleDiffLine(line string) string {
+func styleDiffLine(line string, width int) string {
 	switch {
 	case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-		return addStyle.Render(line)
+		return renderDiffBackground(addLineStyle, line, width)
 	case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-		return delStyle.Render(line)
+		return renderDiffBackground(delLineStyle, line, width)
 	case strings.HasPrefix(line, "@@"):
 		return hunkStyle.Render(line)
 	default:
@@ -1066,7 +1068,14 @@ func styleDiffLine(line string) string {
 }
 
 func truncateStyledDiffLine(line string, width int) string {
-	return styleDiffLine(truncateVisible(line, width))
+	return styleDiffLine(truncateVisible(line, width), width)
+}
+
+func renderDiffBackground(style lipgloss.Style, line string, width int) string {
+	if width <= 0 {
+		return style.Render(line)
+	}
+	return style.Render(padPlain(line, width))
 }
 
 func splitDiff(lines []string, width int) []string {
@@ -1078,41 +1087,49 @@ func splitDiff(lines []string, width int) []string {
 		switch {
 		case strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "@@"):
 			if pending != nil {
-				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth))
+				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
 				pending = nil
 			}
 			out = append(out, line)
 		case strings.HasPrefix(line, "-"):
 			if pending != nil {
-				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth))
+				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
 			}
 			text := strings.TrimPrefix(line, "-")
 			pending = &text
 		case strings.HasPrefix(line, "+"):
 			text := strings.TrimPrefix(line, "+")
 			if pending != nil {
-				out = append(out, formatSplit(*pending, text, leftWidth, rightWidth))
+				out = append(out, formatSplit(*pending, text, leftWidth, rightWidth, true, true))
 				pending = nil
 			} else {
-				out = append(out, formatSplit("", text, leftWidth, rightWidth))
+				out = append(out, formatSplit("", text, leftWidth, rightWidth, false, true))
 			}
 		default:
 			if pending != nil {
-				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth))
+				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
 				pending = nil
 			}
 			text := strings.TrimPrefix(line, " ")
-			out = append(out, formatSplit(text, text, leftWidth, rightWidth))
+			out = append(out, formatSplit(text, text, leftWidth, rightWidth, false, false))
 		}
 	}
 	if pending != nil {
-		out = append(out, formatSplit(*pending, "", leftWidth, rightWidth))
+		out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
 	}
 	return out
 }
 
-func formatSplit(left, right string, leftWidth, rightWidth int) string {
-	return fmt.Sprintf("%-*.*s │ %-*.*s", leftWidth, leftWidth, left, rightWidth, rightWidth, right)
+func formatSplit(left, right string, leftWidth, rightWidth int, leftChanged, rightChanged bool) string {
+	leftCell := padPlain(truncateVisible(left, leftWidth), leftWidth)
+	rightCell := padPlain(truncateVisible(right, rightWidth), rightWidth)
+	if leftChanged {
+		leftCell = delLineStyle.Render(leftCell)
+	}
+	if rightChanged {
+		rightCell = addLineStyle.Render(rightCell)
+	}
+	return leftCell + " │ " + rightCell
 }
 
 func joinColumns(leftLines, rightLines []string, leftWidth int) string {
