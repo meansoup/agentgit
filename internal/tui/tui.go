@@ -755,14 +755,25 @@ func (m model) viewCommitsList(width int) string {
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
-		// In list view, we still show a short marker if it has requests
-		if len(m.links[commit.Hash]) > 0 {
+		if summary := requestSummaryLine(m.links[commit.Hash]); summary != "" {
 			b.WriteString(markerStyle.Render("  ● "))
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("%d requests", len(m.links[commit.Hash]))))
+			b.WriteString(truncateVisible(summary, max(0, width-4)))
 			b.WriteByte('\n')
 		}
 	}
 	return b.String()
+}
+
+func requestSummaryLine(requests []store.LinkedRequest) string {
+	if len(requests) == 0 {
+		return ""
+	}
+	req := requests[0]
+	summary := providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)) + " " + requestStyle.Render(strings.TrimSpace(req.Message))
+	if len(requests) > 1 {
+		summary += mutedStyle.Render(fmt.Sprintf(" (+%d)", len(requests)-1))
+	}
+	return summary
 }
 
 func (m model) viewCommitFilePreview(width int) string {
