@@ -158,9 +158,9 @@ func CommitsWithUncommitted(root string, limit int) ([]Commit, error) {
 	}
 	uncommitted := Commit{
 		Hash:      UncommittedHash,
-		ShortHash: "미커밋",
-		Date:      "현재",
-		Subject:   fmt.Sprintf("미커밋 파일 (%d)", len(files)),
+		ShortHash: "uncommitted",
+		Date:      "working tree",
+		Subject:   fmt.Sprintf("Uncommitted files (%d)", len(files)),
 	}
 	return append([]Commit{uncommitted}, commits...), nil
 }

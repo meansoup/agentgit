@@ -26,7 +26,7 @@ func TestCommitsWithUncommittedAddsWorkingTreeEntryFirst(t *testing.T) {
 	if commits[0].Hash != UncommittedHash {
 		t.Fatalf("first commit hash = %q, want %q", commits[0].Hash, UncommittedHash)
 	}
-	if !strings.Contains(commits[0].Subject, "미커밋 파일") {
+	if !strings.Contains(commits[0].Subject, "Uncommitted files") {
 		t.Fatalf("first commit subject = %q, want uncommitted label", commits[0].Subject)
 	}
 	if commits[1].Subject != "initial" {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/minkuik/agentgit/internal/git"
 	"github.com/minkuik/agentgit/internal/store"
 )
 
@@ -92,5 +93,53 @@ func TestRequestSummaryLineIsSingleLine(t *testing.T) {
 	}
 	if !strings.Contains(got, "Review @internal/tui/tui.go") || !strings.Contains(got, "(+1)") {
 		t.Fatalf("requestSummaryLine missing expected preview details: %q", got)
+	}
+}
+
+func TestMoveInFilesDoesNotLoadDiff(t *testing.T) {
+	m := model{
+		root: "/definitely/not/a/repo",
+		commits: []git.Commit{
+			{Hash: "abc", ShortHash: "abc", Subject: "test"},
+		},
+		files: []string{"a.go", "b.go"},
+		mode:  modeFiles,
+	}
+
+	m.move(1)
+
+	if m.err != nil {
+		t.Fatalf("move in file list loaded diff and set error: %v", m.err)
+	}
+	if m.fileIdx != 1 {
+		t.Fatalf("fileIdx = %d, want 1", m.fileIdx)
+	}
+	if m.diffLines != nil {
+		t.Fatalf("move in file list loaded diff lines: %q", m.diffLines)
+	}
+}
+
+func TestEnterCommitDoesNotPreloadDiff(t *testing.T) {
+	m := model{
+		root: "/definitely/not/a/repo",
+		commits: []git.Commit{
+			{Hash: "abc", ShortHash: "abc", Subject: "test"},
+		},
+		fileCache: map[string][]string{
+			"abc": {"a.go"},
+		},
+		mode: modeCommits,
+	}
+
+	m.enter(false)
+
+	if m.err != nil {
+		t.Fatalf("enter commit loaded diff and set error: %v", m.err)
+	}
+	if m.mode != modeFiles {
+		t.Fatalf("mode = %v, want modeFiles", m.mode)
+	}
+	if m.diffLines != nil {
+		t.Fatalf("enter commit loaded diff lines: %q", m.diffLines)
 	}
 }

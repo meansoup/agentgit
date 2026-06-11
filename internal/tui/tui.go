@@ -322,26 +322,9 @@ func (m model) viewFileDetailsPreview() string {
 		b.WriteByte('\n')
 		b.WriteString(mutedStyle.Render("  press Enter to open image, Right for diff"))
 		b.WriteString("\n\n")
-	}
-
-	// Show a snippet of the diff
-	lines := m.diffLines
-	if m.diffMode == diffSplit {
-		lines = splitDiff(lines, m.width)
-	}
-
-	previewLines := 5
-	for i := 0; i < min(len(lines), previewLines); i++ {
-		b.WriteString(truncateStyledDiffLine(lines[i], m.width-4))
-		b.WriteByte('\n')
-	}
-	if len(lines) > previewLines {
-		diffKeys := "Enter/Right"
-		if m.selectedFileIsImage() {
-			diffKeys = "Right"
-		}
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ... %d more lines (press %s for full diff)", len(lines)-previewLines, diffKeys)))
-		b.WriteByte('\n')
+	} else {
+		b.WriteString(mutedStyle.Render("  press Enter/Right for diff"))
+		b.WriteString("\n\n")
 	}
 
 	style := lipgloss.NewStyle().
@@ -510,7 +493,6 @@ func (m *model) move(delta int) {
 		m.loadCommitFiles()
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
-		m.loadSelectedDiff()
 	case modeDiff, modeFullFile, modeRequest:
 		m.scroll = max(0, m.scroll+delta)
 	}
@@ -578,7 +560,6 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		}
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
-		m.loadSelectedDiff()
 		m.mode = modeFiles
 	case modeFiles:
 		if len(m.files) == 0 {
@@ -663,8 +644,9 @@ func (m *model) refresh() {
 			m.mode = modeCommits
 			return
 		}
-		m.loadSelectedDiff()
-		if m.mode == modeFullFile {
+		if m.mode == modeDiff {
+			m.loadSelectedDiff()
+		} else if m.mode == modeFullFile {
 			m.loadFullFile()
 		}
 	}
