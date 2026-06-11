@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
+
+const UncommittedHash = "__agentgit_uncommitted__"
 
 type Commit struct {
 	Hash      string
@@ -140,7 +144,31 @@ func Commits(root string, limit int) ([]Commit, error) {
 	return commits, nil
 }
 
+func CommitsWithUncommitted(root string, limit int) ([]Commit, error) {
+	commits, err := Commits(root, limit)
+	if err != nil {
+		return nil, err
+	}
+	files, err := UncommittedFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return commits, nil
+	}
+	uncommitted := Commit{
+		Hash:      UncommittedHash,
+		ShortHash: "미커밋",
+		Date:      "현재",
+		Subject:   fmt.Sprintf("미커밋 파일 (%d)", len(files)),
+	}
+	return append([]Commit{uncommitted}, commits...), nil
+}
+
 func ChangedFiles(root string, commitHash string) ([]string, error) {
+	if commitHash == UncommittedHash {
+		return UncommittedFiles(root)
+	}
 	out, err := Run(root, "show", "--pretty=format:", "--name-only", commitHash)
 	if err != nil {
 		return nil, err
@@ -155,12 +183,69 @@ func ChangedFiles(root string, commitHash string) ([]string, error) {
 	return files, nil
 }
 
+func UncommittedFiles(root string) ([]string, error) {
+	paths, err := StatusPaths(root)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(paths))
+	for path := range paths {
+		files = append(files, path)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
 func UnifiedDiff(root string, commitHash string, path string) ([]string, error) {
+	if commitHash == UncommittedHash {
+		return UncommittedDiff(root, path)
+	}
 	out, err := Run(root, "show", "--format=", "--no-ext-diff", "--unified=999999", commitHash, "--", path)
 	if err != nil {
 		return nil, err
 	}
 	return strings.Split(strings.TrimRight(out, "\n"), "\n"), nil
+}
+
+func UncommittedDiff(root string, path string) ([]string, error) {
+	if isTracked(root, path) {
+		out, err := Run(root, "diff", "--no-ext-diff", "--unified=999999", "HEAD", "--", path)
+		if err != nil {
+			return nil, err
+		}
+		return strings.Split(strings.TrimRight(out, "\n"), "\n"), nil
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Contains(data, []byte{0}) {
+		return []string{
+			"diff --git a/" + path + " b/" + path,
+			"new file mode 100644",
+			"Binary file /dev/null and b/" + path + " differ",
+		}, nil
+	}
+	content := strings.TrimRight(string(data), "\n")
+	body := []string{}
+	if content != "" {
+		for _, line := range strings.Split(content, "\n") {
+			body = append(body, "+"+line)
+		}
+	}
+	diff := []string{
+		"diff --git a/" + path + " b/" + path,
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/" + path,
+		fmt.Sprintf("@@ -0,0 +1,%d @@", len(body)),
+	}
+	return append(diff, body...), nil
+}
+
+func isTracked(root string, path string) bool {
+	_, err := Run(root, "ls-files", "--error-unmatch", "--", path)
+	return err == nil
 }
 
 func CatFile(root string, commitHash string, path string) (string, error) {
@@ -172,5 +257,8 @@ func CatFile(root string, commitHash string, path string) (string, error) {
 }
 
 func CatFileBytes(root string, commitHash string, path string) ([]byte, error) {
+	if commitHash == UncommittedHash {
+		return os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+	}
 	return RunBytes(root, "show", commitHash+":"+path)
 }

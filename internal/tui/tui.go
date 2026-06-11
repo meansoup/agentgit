@@ -84,7 +84,7 @@ var (
 )
 
 func Run(root string, limit int) error {
-	commits, err := git.Commits(root, limit)
+	commits, err := git.CommitsWithUncommitted(root, limit)
 	if err != nil {
 		return err
 	}
@@ -616,7 +616,7 @@ func (m *model) refresh() {
 		selectedFile = m.files[m.fileIdx]
 	}
 
-	commits, err := git.Commits(m.root, m.limit)
+	commits, err := git.CommitsWithUncommitted(m.root, m.limit)
 	if err != nil {
 		m.err = err
 		return
