@@ -142,7 +142,7 @@ func PrintStatic(w io.Writer, commits []git.Commit, links map[string][]store.Lin
 		for _, req := range links[commit.Hash] {
 			line := markerStyle.Render("└─ ●") + " " +
 				providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)) + " " +
-				requestStyle.Render(req.Message)
+				requestStyle.Render(requestPreviewMessage(req.Message))
 			if _, err := fmt.Fprintln(w, line); err != nil {
 				return err
 			}
@@ -280,8 +280,7 @@ func (m model) viewCommitDetailsPreview() string {
 		b.WriteString(markerStyle.Render("Requests:"))
 		b.WriteString("\n")
 		for _, req := range requests {
-			// Wrap message to width
-			msg := requestStyle.Render(req.Message)
+			msg := requestStyle.Render(requestPreviewMessage(req.Message))
 			b.WriteString(fmt.Sprintf("  ● [%s %s] %s\n", providerStyle.Render(req.AgentName), providerStyle.Render(req.Model), msg))
 		}
 		b.WriteString("\n")
@@ -770,11 +769,20 @@ func requestSummaryLine(requests []store.LinkedRequest) string {
 		return ""
 	}
 	req := requests[0]
-	summary := providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)) + " " + requestStyle.Render(strings.TrimSpace(req.Message))
+	summary := providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)) + " " + requestStyle.Render(requestPreviewMessage(req.Message))
 	if len(requests) > 1 {
 		summary += mutedStyle.Render(fmt.Sprintf(" (+%d)", len(requests)-1))
 	}
 	return summary
+}
+
+func requestPreviewMessage(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		if preview := strings.Join(strings.Fields(line), " "); preview != "" {
+			return preview
+		}
+	}
+	return ""
 }
 
 func (m model) viewCommitFilePreview(width int) string {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/minkuik/agentgit/internal/store"
 )
 
 func TestStyleDiffLineStripsNestedANSIWhenRenderingBackground(t *testing.T) {
@@ -56,5 +57,40 @@ func TestSplitDiffFitsNarrowWidths(t *testing.T) {
 		if visible := ansi.StringWidth(ansi.Strip(got[0])); visible > width {
 			t.Fatalf("splitDiff(%d) visible width = %d, want <= %d: %q", width, visible, width, got[0])
 		}
+	}
+}
+
+func TestRequestPreviewMessageUsesFirstNonEmptyLine(t *testing.T) {
+	message := "\n\tOpen @lib/main.go\n\npackage main\nfunc main() {}\n"
+
+	got := requestPreviewMessage(message)
+	if want := "Open @lib/main.go"; got != want {
+		t.Fatalf("requestPreviewMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestRequestSummaryLineIsSingleLine(t *testing.T) {
+	requests := []store.LinkedRequest{
+		{
+			AgentName: "gemini",
+			Model:     "gemini-2.5-pro",
+			Message:   "Review @internal/tui/tui.go\n\nfull file content\nmore content",
+		},
+		{
+			AgentName: "codex",
+			Model:     "gpt-5",
+			Message:   "second request",
+		},
+	}
+
+	got := ansi.Strip(requestSummaryLine(requests))
+	if strings.Contains(got, "\n") {
+		t.Fatalf("requestSummaryLine contained newline: %q", got)
+	}
+	if strings.Contains(got, "full file content") || strings.Contains(got, "more content") {
+		t.Fatalf("requestSummaryLine leaked multiline request content: %q", got)
+	}
+	if !strings.Contains(got, "Review @internal/tui/tui.go") || !strings.Contains(got, "(+1)") {
+		t.Fatalf("requestSummaryLine missing expected preview details: %q", got)
 	}
 }
