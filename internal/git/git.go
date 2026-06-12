@@ -71,6 +71,18 @@ func Head(root string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func GitPath(root string, path string) (string, error) {
+	out, err := Run(root, "rev-parse", "--git-path", path)
+	if err != nil {
+		return "", err
+	}
+	resolved := strings.TrimSpace(out)
+	if filepath.IsAbs(resolved) {
+		return resolved, nil
+	}
+	return filepath.Join(root, resolved), nil
+}
+
 func CommitsAfter(root string, afterHash string) ([]string, error) {
 	if afterHash == "" {
 		return nil, nil

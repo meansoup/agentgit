@@ -48,14 +48,14 @@ func usage() {
 	fmt.Println(`usage:
   agentgit [--limit 500] [path]
   agentgit setup codex|gemini
-  agentgit hook codex|gemini
+  agentgit hook codex|gemini|post-commit
   agentgit version
 
 commands:
   agentgit                      browse request-linked commits for the current path
   agentgit <path>               browse request-linked commits for a path
   setup codex|gemini            install lifecycle hooks once for this PC
-  hook codex|gemini             internal hook entrypoint
+  hook codex|gemini|post-commit internal hook entrypoint
   version                       print version`)
 }
 
@@ -113,7 +113,7 @@ func cmdSetup(args []string) error {
 
 func cmdHook(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: agentgit hook codex|gemini")
+		return errors.New("usage: agentgit hook codex|gemini|post-commit")
 	}
 	switch args[0] {
 	case "codex":
@@ -127,8 +127,15 @@ func cmdHook(args []string) error {
 		}
 		return nil
 	case "post-commit":
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if err := hooks.HandlePostCommit(cwd); err != nil {
+			fmt.Fprintln(os.Stderr, "agentgit hook post-commit:", err)
+		}
 		return nil
 	default:
-		return errors.New("usage: agentgit hook codex|gemini")
+		return errors.New("usage: agentgit hook codex|gemini|post-commit")
 	}
 }

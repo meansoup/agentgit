@@ -16,8 +16,10 @@ import (
 const AgentgitHookCommand = "agentgit hook codex"
 const AgentgitGeminiHookCommand = "agentgit hook gemini"
 const (
-	agentgitCodexHookStart = "# BEGIN agentgit codex hooks"
-	agentgitCodexHookEnd   = "# END agentgit codex hooks"
+	agentgitCodexHookStart  = "# BEGIN agentgit codex hooks"
+	agentgitCodexHookEnd    = "# END agentgit codex hooks"
+	agentgitPostCommitStart = "# BEGIN agentgit post-commit hook"
+	agentgitPostCommitEnd   = "# END agentgit post-commit hook"
 )
 
 func InstallCodex() (string, error) {
@@ -249,6 +251,44 @@ exec %s hook gemini
 	return runner, nil
 }
 
+func EnsurePostCommitHook(root string) error {
+	bin, err := resolveAgentgitExecutable()
+	if err != nil {
+		return err
+	}
+	hookPath, err := git.GitPath(root, "hooks/post-commit")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		return err
+	}
+	var existing string
+	if raw, err := os.ReadFile(hookPath); err == nil {
+		existing = string(raw)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	cleaned := removeBlock(existing, agentgitPostCommitStart, agentgitPostCommitEnd)
+	block := fmt.Sprintf(`%s
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH
+%s hook post-commit
+%s
+`, agentgitPostCommitStart, shellQuote(bin), agentgitPostCommitEnd)
+	if strings.TrimSpace(cleaned) != "" && !strings.HasSuffix(cleaned, "\n") {
+		cleaned += "\n"
+	}
+	if strings.TrimSpace(cleaned) != "" {
+		cleaned += "\n"
+	}
+	content := cleaned + block
+	if !strings.HasPrefix(content, "#!") {
+		content = "#!/bin/sh\n" + content
+	}
+	return os.WriteFile(hookPath, []byte(content), 0o755)
+}
+
 func resolveAgentgitExecutable() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("AGENTGIT_HOOK_BIN")); override != "" {
 		return filepath.Abs(expandHome(override))
@@ -408,15 +448,19 @@ func installGeminiSettingsHooks(settingsPath, runner string) error {
 }
 
 func removeAgentgitCodexHookBlock(s string) string {
-	start := strings.Index(s, agentgitCodexHookStart)
+	return removeBlock(s, agentgitCodexHookStart, agentgitCodexHookEnd)
+}
+
+func removeBlock(s, startMarker, endMarker string) string {
+	start := strings.Index(s, startMarker)
 	if start == -1 {
 		return s
 	}
-	end := strings.Index(s[start:], agentgitCodexHookEnd)
+	end := strings.Index(s[start:], endMarker)
 	if end == -1 {
 		return s
 	}
-	end += start + len(agentgitCodexHookEnd)
+	end += start + len(endMarker)
 	for end < len(s) && (s[end] == '\n' || s[end] == '\r') {
 		end++
 	}
@@ -488,6 +532,9 @@ func HandleGemini(r io.Reader) error {
 }
 
 func handleGeminiBeforeAgent(input geminiHookInput, root string) error {
+	if err := EnsurePostCommitHook(root); err != nil {
+		return err
+	}
 	baseline, err := git.StatusPaths(root)
 	if err != nil {
 		return err
@@ -527,18 +574,9 @@ func handleGeminiAfterAgent(input geminiHookInput, root string) error {
 	if turnID == "" {
 		turnID = "current"
 	}
-	req, ok, err := store.FindRequest("gemini", input.SessionID, turnID)
+	req, ok, err := store.FindRequest(root, "gemini", input.SessionID, turnID)
 	if err != nil || !ok {
 		return err
-	}
-	hashes, err := git.CommitsAfter(root, req.BaselineHead)
-	if err != nil {
-		return err
-	}
-	for _, hash := range hashes {
-		if err := store.LinkCommit(req.ID, hash, root); err != nil {
-			return err
-		}
 	}
 	return store.FinishRequest(req.ID)
 }
@@ -556,6 +594,9 @@ type geminiHookInput struct {
 }
 
 func handleCodexUserPromptSubmit(input codexHookInput, root string) error {
+	if err := EnsurePostCommitHook(root); err != nil {
+		return err
+	}
 	baseline, err := git.StatusPaths(root)
 	if err != nil {
 		return err
@@ -566,20 +607,34 @@ func handleCodexUserPromptSubmit(input codexHookInput, root string) error {
 }
 
 func handleCodexStop(input codexHookInput, root string) error {
-	req, ok, err := store.FindRequest("codex", input.SessionID, input.TurnID)
+	req, ok, err := store.FindRequest(root, "codex", input.SessionID, input.TurnID)
 	if err != nil || !ok {
 		return err
 	}
-	hashes, err := git.CommitsAfter(root, req.BaselineHead)
+	return store.FinishRequest(req.ID)
+}
+
+func HandlePostCommit(cwd string) error {
+	root, err := git.RepoRoot(cwd)
+	if err != nil {
+		return nil
+	}
+	hash, err := git.Head(root)
 	if err != nil {
 		return err
 	}
-	for _, hash := range hashes {
-		if err := store.LinkCommit(req.ID, hash, root); err != nil {
-			return err
-		}
+	req, ok, err := activeRequestForCommit(root, os.Getenv("AGENTGIT_SESSION_ID"))
+	if err != nil || !ok {
+		return err
 	}
-	return store.FinishRequest(req.ID)
+	return store.LinkCommit(req.ID, hash, root)
+}
+
+func activeRequestForCommit(root, sessionID string) (store.Request, bool, error) {
+	if strings.TrimSpace(sessionID) != "" {
+		return store.FindActiveRequestBySession(root, sessionID)
+	}
+	return store.FindSingleActiveRequest(root)
 }
 
 type codexHookInput struct {

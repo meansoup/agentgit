@@ -161,7 +161,7 @@ func CreateRequest(provider, agentName, model, message, repoRoot, sessionID, tur
 }
 
 func CreateOrUpdateRequest(provider, agentName, model, message, repoRoot, sessionID, turnID, baselineHead string, baseline map[string]bool) (int64, error) {
-	if existing, ok, err := FindRequest(agentName, sessionID, turnID); err != nil {
+	if existing, ok, err := FindRequest(repoRoot, agentName, sessionID, turnID); err != nil {
 		return 0, err
 	} else if ok {
 		return existing.ID, nil
@@ -202,7 +202,7 @@ func GetRequest(id int64) (Request, error) {
 	return req, nil
 }
 
-func FindRequest(agentName, sessionID, turnID string) (Request, bool, error) {
+func FindRequest(repoRoot, agentName, sessionID, turnID string) (Request, bool, error) {
 	if _, err := Init(); err != nil {
 		return Request{}, false, err
 	}
@@ -215,9 +215,10 @@ func FindRequest(agentName, sessionID, turnID string) (Request, bool, error) {
 	err = db.QueryRow(
 		`SELECT id
 		 FROM agent_requests
-		 WHERE COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ? AND finished_at IS NULL
+		 WHERE repo_root = ? AND COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ? AND finished_at IS NULL
 		 ORDER BY id DESC
 		 LIMIT 1`,
+		repoRoot,
 		agentName,
 		sessionID,
 		turnID,
@@ -228,9 +229,10 @@ func FindRequest(agentName, sessionID, turnID string) (Request, bool, error) {
 		err = db.QueryRow(
 			`SELECT id
 			 FROM agent_requests
-			 WHERE COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ?
+			 WHERE repo_root = ? AND COALESCE(agent_name, provider) = ? AND session_id = ? AND turn_id = ?
 			 ORDER BY id DESC
 			 LIMIT 1`,
+			repoRoot,
 			agentName,
 			sessionID,
 			turnID,
@@ -243,6 +245,77 @@ func FindRequest(agentName, sessionID, turnID string) (Request, bool, error) {
 		return Request{}, false, err
 	}
 	req, err := GetRequest(id)
+	return req, err == nil, err
+}
+
+func FindActiveRequestBySession(repoRoot, sessionID string) (Request, bool, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return Request{}, false, nil
+	}
+	if _, err := Init(); err != nil {
+		return Request{}, false, err
+	}
+	db, err := Open()
+	if err != nil {
+		return Request{}, false, err
+	}
+	defer db.Close()
+	var id int64
+	err = db.QueryRow(
+		`SELECT id
+		 FROM agent_requests
+		 WHERE repo_root = ? AND session_id = ? AND finished_at IS NULL
+		 ORDER BY id DESC
+		 LIMIT 1`,
+		repoRoot,
+		sessionID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Request{}, false, nil
+	}
+	if err != nil {
+		return Request{}, false, err
+	}
+	req, err := GetRequest(id)
+	return req, err == nil, err
+}
+
+func FindSingleActiveRequest(repoRoot string) (Request, bool, error) {
+	if _, err := Init(); err != nil {
+		return Request{}, false, err
+	}
+	db, err := Open()
+	if err != nil {
+		return Request{}, false, err
+	}
+	defer db.Close()
+	rows, err := db.Query(
+		`SELECT id
+		 FROM agent_requests
+		 WHERE repo_root = ? AND finished_at IS NULL
+		 ORDER BY id DESC
+		 LIMIT 2`,
+		repoRoot,
+	)
+	if err != nil {
+		return Request{}, false, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return Request{}, false, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return Request{}, false, err
+	}
+	if len(ids) != 1 {
+		return Request{}, false, nil
+	}
+	req, err := GetRequest(ids[0])
 	return req, err == nil, err
 }
 
