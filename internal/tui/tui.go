@@ -68,6 +68,7 @@ type model struct {
 	height     int
 	err        error
 	notice     string
+	helpOpen   bool
 }
 
 type selectAction int
@@ -200,6 +201,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
+		if m.helpOpen {
+			switch msg.String() {
+			case "?", "esc", "q", "enter":
+				m.helpOpen = false
+				return m, nil
+			case "ctrl+c":
+				return m, tea.Quit
+			default:
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			if m.mode == modeSelect && m.pending != selectActionNone {
@@ -265,6 +277,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.mode == modeSelect {
 				m.confirmSelectAction()
 			}
+		case "?":
+			m.helpOpen = true
 		}
 	case imageOpenMsg:
 		if msg.err != nil {
@@ -280,7 +294,14 @@ func (m model) View() string {
 	}
 	content, focusLine := m.contentView()
 	if m.width <= 0 || m.height <= 0 {
-		return titleStyle.Render(m.headerTitleLine()) + "\n" + m.contextLine(120) + "\n\n" + content
+		base := titleStyle.Render(m.headerTitleLine()) + "\n" + m.contextLine(120) + "\n\n" + content
+		if m.helpOpen {
+			return base + "\n\n" + m.viewHelpDialog(120, 0)
+		}
+		return base
+	}
+	if m.helpOpen {
+		return m.viewHelpFrame()
 	}
 	return m.viewFrame(content, focusLine)
 }
@@ -617,6 +638,7 @@ func (m model) viewFooter() string {
 	for _, item := range m.shortcuts() {
 		line += "  " + keyStyle.Render(item.keys) + " " + helpStyle.Render(item.action)
 	}
+	line += "  " + keyStyle.Render("?") + " " + helpStyle.Render("help")
 	return footerStyle.Width(m.width).Render(truncateVisible(line, max(0, m.width-2)))
 }
 
@@ -695,6 +717,158 @@ func (m model) shortcuts() []shortcut {
 		}
 	default:
 		return []shortcut{{"q", "quit"}}
+	}
+}
+
+type helpEntry struct {
+	keys        string
+	action      string
+	description string
+}
+
+func (m model) viewHelpFrame() string {
+	header := m.viewHeader()
+	footer := m.viewFooter()
+	headerHeight := lipgloss.Height(header)
+	footerHeight := lipgloss.Height(footer)
+	bodyHeight := max(0, m.height-headerHeight-footerHeight)
+	dialog := m.viewHelpDialog(m.width, bodyHeight)
+	body := lipgloss.Place(m.width, bodyHeight, lipgloss.Center, lipgloss.Center, dialog)
+	return header + "\n" + body + "\n" + footer
+}
+
+func (m model) viewHelpDialog(width int, height int) string {
+	dialogWidth := clamp(width-8, 36, 76)
+	if width > 0 && dialogWidth > width {
+		dialogWidth = width
+	}
+	contentWidth := max(0, dialogWidth-4)
+	entries := m.helpEntries()
+	keyWidth := 0
+	for _, entry := range entries {
+		keyWidth = max(keyWidth, lipgloss.Width(entry.keys))
+	}
+	keyWidth = clamp(keyWidth, 6, 16)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("Help"))
+	lines = append(lines, mutedStyle.Render("view: "+m.modeName()+"  close: ?, esc, q, enter"))
+	lines = append(lines, strings.Repeat("─", contentWidth))
+	for _, entry := range entries {
+		keyCell := keyStyle.Render(padPlain(entry.keys, keyWidth))
+		textWidth := max(0, contentWidth-keyWidth-3)
+		text := entry.action
+		if entry.description != "" {
+			text += "  " + mutedStyle.Render(entry.description)
+		}
+		lines = append(lines, keyCell+"  "+truncateVisible(text, textWidth))
+	}
+	lines = append(lines, strings.Repeat("─", contentWidth))
+	lines = append(lines, mutedStyle.Render("Press ? to return."))
+
+	if height > 0 {
+		maxContentLines := max(3, height-4)
+		if len(lines) > maxContentLines {
+			lines = append([]string(nil), lines[:maxContentLines]...)
+			lines[len(lines)-1] = mutedStyle.Render("... resize the terminal to see more")
+		}
+	}
+	for i, line := range lines {
+		lines[i] = truncateVisible(line, contentWidth)
+	}
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("14")).
+		Padding(0, 1).
+		Width(dialogWidth)
+	return style.Render(strings.Join(lines, "\n"))
+}
+
+func (m model) helpEntries() []helpEntry {
+	entries := []helpEntry{
+		{"?", "Close help", "return to the current screen"},
+		{"ctrl+c", "Quit", "exit agentgit immediately"},
+	}
+	switch m.mode {
+	case modeCommits:
+		return append([]helpEntry{
+			{"up/down", "Move cursor", "select a commit"},
+			{"enter/right", "Open files", "show files changed by the selected commit"},
+			{"tab", "Directories", "switch to directory summary"},
+			{"s", "Select mode", "choose latest commits for remove or merge"},
+			{"v", "Request details", "show full linked request text"},
+			{"r", "Refresh", "reload commits and request links"},
+			{"q", "Quit", "exit agentgit"},
+		}, entries...)
+	case modeSelect:
+		if m.pending != selectActionNone {
+			return append([]helpEntry{
+				{"y", "Confirm", "rewrite the selected latest commits"},
+				{"n/esc", "Cancel", "return to select mode without rewriting"},
+				{"q", "Close prompt", "cancel the pending action"},
+			}, entries...)
+		}
+		return append([]helpEntry{
+			{"up/down", "Move cursor", "select a commit row"},
+			{"space/enter", "Toggle selection", "only latest contiguous ranges can be applied"},
+			{"x", "Remove", "reset selected latest commits and delete their request links"},
+			{"m", "Merge", "squash selected latest commits and move request links"},
+			{"s/left", "Back", "return to commit list"},
+			{"r", "Refresh", "reload commits and keep valid selections"},
+		}, entries...)
+	case modeDirectories:
+		return append([]helpEntry{
+			{"up/down", "Move cursor", "select a directory or file path"},
+			{"enter/right", "Open latest files", "show matching files from the latest commit touching this path"},
+			{"tab", "Commits", "switch back to commit list"},
+			{"r", "Refresh", "reload commits and request links"},
+			{"q", "Quit", "exit agentgit"},
+		}, entries...)
+	case modeFiles:
+		if m.selectedFileIsImage() {
+			return append([]helpEntry{
+				{"up/down", "Move cursor", "select a changed file"},
+				{"enter", "Open image", "open the image with the system viewer"},
+				{"right", "Open diff", "show the file diff"},
+				{"left/backspace", "Back", "return to commits"},
+				{"r", "Refresh", "reload commits and files"},
+			}, entries...)
+		}
+		return append([]helpEntry{
+			{"up/down", "Move cursor", "select a changed file"},
+			{"enter/right", "Open diff", "show the file diff"},
+			{"left/backspace", "Back", "return to commits"},
+			{"r", "Refresh", "reload commits and files"},
+		}, entries...)
+	case modeDiff:
+		return append([]helpEntry{
+			{"up/down", "Scroll", "move through diff lines"},
+			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"n/p", "Next/previous hunk", "jump between diff hunks"},
+			{"m", "Diff layout", "toggle unified and split diff"},
+			{"f", "Full file", "show the full file at this revision"},
+			{"left/backspace", "Back", "return to file list"},
+			{"r", "Refresh", "reload current commit data"},
+		}, entries...)
+	case modeFullFile:
+		return append([]helpEntry{
+			{"up/down", "Scroll", "move through file lines"},
+			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"f", "Diff", "return to diff view"},
+			{"left/backspace", "Back", "return to file list"},
+			{"r", "Refresh", "reload current commit data"},
+		}, entries...)
+	case modeRequest:
+		return append([]helpEntry{
+			{"up/down", "Scroll", "move through request text"},
+			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"v", "Back", "return to commit list"},
+			{"left/backspace", "Back", "return to file list"},
+			{"r", "Refresh", "reload request links"},
+		}, entries...)
+	default:
+		return entries
 	}
 }
 

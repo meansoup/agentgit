@@ -41,6 +41,7 @@ The top context bar shows the base path, Git branch, HEAD, commit count, and dir
 - **Refresh**: `r`
 - **Toggle View**: `m` (Unified/Split diff)
 - **Next/Prev Hunk**: `n`/`p`
+- **Help dialog**: `?`
 - **Quit**: `q`
 
 ## How It Works

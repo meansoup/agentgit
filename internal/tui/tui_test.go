@@ -123,6 +123,65 @@ func TestHeaderShowsRepoContext(t *testing.T) {
 	}
 }
 
+func TestQuestionMarkOpensHelpDialog(t *testing.T) {
+	m := model{
+		root:   "/repo",
+		branch: "main",
+		head:   "abc",
+		commits: []git.Commit{
+			{Hash: "abc", ShortHash: "abc", Subject: "change"},
+		},
+		mode:   modeCommits,
+		width:  100,
+		height: 30,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	got := updated.(model)
+
+	if !got.helpOpen {
+		t.Fatal("helpOpen = false, want true")
+	}
+	view := ansi.Strip(got.View())
+	for _, want := range []string{"Help", "view: commits", "enter/right", "Open files"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("help view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestHelpDialogClosesWithoutQuitting(t *testing.T) {
+	m := model{
+		mode:     modeDiff,
+		helpOpen: true,
+		width:    100,
+		height:   30,
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	got := updated.(model)
+
+	if got.helpOpen {
+		t.Fatal("helpOpen = true, want false")
+	}
+	if cmd != nil {
+		t.Fatal("q while help is open returned a quit command")
+	}
+}
+
+func TestFooterIncludesHelpShortcut(t *testing.T) {
+	m := model{
+		mode:  modeFiles,
+		width: 120,
+	}
+
+	footer := ansi.Strip(m.viewFooter())
+
+	if !strings.Contains(footer, "?") || !strings.Contains(footer, "help") {
+		t.Fatalf("footer missing help shortcut:\n%s", footer)
+	}
+}
+
 func TestContextLineCompactsLongPath(t *testing.T) {
 	m := model{
 		root:   "/very/long/path/that/will/not/fit/inside/the/context/window/agentgit",
