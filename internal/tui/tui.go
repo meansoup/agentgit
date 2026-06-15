@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,6 +26,7 @@ type mode int
 
 const (
 	modeCommits mode = iota
+	modeDirectories
 	modeFiles
 	modeDiff
 	modeFullFile
@@ -39,28 +41,46 @@ const (
 )
 
 type model struct {
-	root      string
-	limit     int
-	commits   []git.Commit
-	links     map[string][]store.LinkedRequest
-	files     []string
-	diffLines []string
-	fullLines []string
-	fileCache map[string][]string
-	diffCache map[string][]string
-	fullCache map[string][]string
-	mode      mode
-	diffMode  diffMode
-	commitIdx int
-	fileIdx   int
-	scroll    int
-	width     int
-	height    int
-	err       error
+	root       string
+	limit      int
+	commits    []git.Commit
+	links      map[string][]store.LinkedRequest
+	files      []string
+	diffLines  []string
+	fullLines  []string
+	dirEntries []directoryEntry
+	fileCache  map[string][]string
+	diffCache  map[string][]string
+	fullCache  map[string][]string
+	mode       mode
+	diffMode   diffMode
+	commitIdx  int
+	dirIdx     int
+	fileIdx    int
+	scroll     int
+	width      int
+	height     int
+	err        error
 }
 
 type imageOpenMsg struct {
 	err error
+}
+
+type directoryEntry struct {
+	Path          string
+	DisplayName   string
+	Depth         int
+	IsDir         bool
+	CommitIndexes []int
+	FileCount     int
+}
+
+type directoryStats struct {
+	path          string
+	isDir         bool
+	commitIndexes map[int]bool
+	files         map[string]bool
 }
 
 var (
@@ -176,6 +196,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.enter(false)
 		case "enter":
 			return m, m.enter(true)
+		case "tab":
+			m.toggleTopLevelView()
 		case "left", "backspace":
 			m.back()
 		case "m":
@@ -218,6 +240,8 @@ func (m model) contentView() (string, int) {
 	switch m.mode {
 	case modeCommits:
 		return m.viewCommitsList(m.width), m.commitFocusLine()
+	case modeDirectories:
+		return m.viewDirectoryList(m.width), m.directoryFocusLine()
 	case modeFiles:
 		return m.viewFilesList(m.width), m.fileFocusLine()
 	case modeDiff:
@@ -238,6 +262,8 @@ func (m model) viewFrame(content string, focusLine int) string {
 	var staticTop string
 	if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
+	} else if m.mode == modeDirectories {
+		staticTop = m.viewDirectoryDetailsPreview()
 	} else if m.mode == modeFiles {
 		staticTop = m.viewFileDetailsPreview()
 	}
@@ -399,7 +425,9 @@ func (m model) fitPreviewContent(content string, height int, overflow string) st
 func (m model) helpText() string {
 	switch m.mode {
 	case modeCommits:
-		return "up/down move  enter/right files  v request  r refresh  q quit"
+		return "up/down move  enter/right files  tab directories  v request  r refresh  q quit"
+	case modeDirectories:
+		return "up/down move  enter/right latest files  tab commits  r refresh  q quit"
 	case modeFiles:
 		if m.selectedFileIsImage() {
 			return "up/down move  enter image  right diff  left/backspace back  r refresh  q quit"
@@ -440,7 +468,16 @@ func (m model) shortcuts() []shortcut {
 		return []shortcut{
 			{"up/down", "move"},
 			{"enter/right", "files"},
+			{"tab", "dirs"},
 			{"v", "request"},
+			{"r", "refresh"},
+			{"q", "quit"},
+		}
+	case modeDirectories:
+		return []shortcut{
+			{"up/down", "move"},
+			{"enter/right", "files"},
+			{"tab", "commits"},
 			{"r", "refresh"},
 			{"q", "quit"},
 		}
@@ -491,6 +528,8 @@ func (m *model) move(delta int) {
 	case modeCommits:
 		m.commitIdx = clamp(m.commitIdx+delta, 0, len(m.commits)-1)
 		m.loadCommitFiles()
+	case modeDirectories:
+		m.dirIdx = clamp(m.dirIdx+delta, 0, len(m.dirEntries)-1)
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
 	case modeDiff, modeFullFile, modeRequest:
@@ -561,6 +600,8 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		m.mode = modeFiles
+	case modeDirectories:
+		m.enterDirectoryEntry()
 	case modeFiles:
 		if len(m.files) == 0 {
 			return nil
@@ -587,10 +628,28 @@ func (m *model) back() {
 	}
 }
 
+func (m *model) toggleTopLevelView() {
+	if m.mode == modeDirectories {
+		m.mode = modeCommits
+		m.scroll = 0
+		return
+	}
+	m.loadDirectoryEntries()
+	if m.err != nil {
+		return
+	}
+	m.mode = modeDirectories
+	m.scroll = 0
+}
+
 func (m *model) refresh() {
 	selectedCommit := ""
 	if len(m.commits) > 0 && m.commitIdx >= 0 && m.commitIdx < len(m.commits) {
 		selectedCommit = m.commits[m.commitIdx].Hash
+	}
+	selectedDirectory := ""
+	if len(m.dirEntries) > 0 && m.dirIdx >= 0 && m.dirIdx < len(m.dirEntries) {
+		selectedDirectory = m.dirEntries[m.dirIdx].Path
 	}
 	selectedFile := ""
 	if len(m.files) > 0 && m.fileIdx >= 0 && m.fileIdx < len(m.files) {
@@ -612,6 +671,7 @@ func (m *model) refresh() {
 	m.fileCache = map[string][]string{}
 	m.diffCache = map[string][]string{}
 	m.fullCache = map[string][]string{}
+	m.dirEntries = nil
 	m.diffLines = nil
 	m.fullLines = nil
 	m.scroll = 0
@@ -625,13 +685,23 @@ func (m *model) refresh() {
 		}
 	}
 	m.loadCommitFiles()
+	if m.mode == modeDirectories {
+		m.loadDirectoryEntries()
+		m.dirIdx = 0
+		for i, entry := range m.dirEntries {
+			if entry.Path == selectedDirectory {
+				m.dirIdx = i
+				break
+			}
+		}
+	}
 	if len(m.commits) == 0 {
 		m.files = nil
 		m.fileIdx = 0
 		m.mode = modeCommits
 		return
 	}
-	if m.mode != modeCommits && m.mode != modeRequest {
+	if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		for i, file := range m.files {
@@ -723,6 +793,10 @@ func (m model) commitFocusLine() int {
 	return 0
 }
 
+func (m model) directoryFocusLine() int {
+	return m.dirIdx
+}
+
 func (m model) fileFocusLine() int {
 	return 2 + m.fileIdx
 }
@@ -744,6 +818,72 @@ func (m model) viewCommitsList(width int) string {
 		}
 	}
 	return b.String()
+}
+
+func (m model) viewDirectoryList(width int) string {
+	if len(m.dirEntries) == 0 {
+		return mutedStyle.Render("no changed directories")
+	}
+	var b strings.Builder
+	for i, entry := range m.dirEntries {
+		kind := "[f]"
+		name := entry.DisplayName
+		if entry.IsDir {
+			kind = "[d]"
+			name += "/"
+		}
+		indent := strings.Repeat("  ", entry.Depth)
+		detail := fmt.Sprintf("  %d commits", len(entry.CommitIndexes))
+		if entry.IsDir {
+			detail = fmt.Sprintf("  %d commits, %d files", len(entry.CommitIndexes), entry.FileCount)
+		}
+		line := indent + mutedStyle.Render(kind) + " " + fileStyle.Render(name) + mutedStyle.Render(detail)
+		line = truncateVisible(line, width)
+		if i == m.dirIdx {
+			line = cursorStyle.Render(line)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func (m model) viewDirectoryDetailsPreview() string {
+	if len(m.dirEntries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(m.dirEntries) {
+		return ""
+	}
+	entry := m.dirEntries[m.dirIdx]
+	var b strings.Builder
+	title := "File Details"
+	path := entry.Path
+	if entry.IsDir {
+		title = "Directory Details"
+		path += "/"
+	}
+	b.WriteString(titleStyle.Render(title))
+	b.WriteString("\n")
+	b.WriteString(fileStyle.Render(path))
+	b.WriteString(mutedStyle.Render(fmt.Sprintf("  %d commits", len(entry.CommitIndexes))))
+	if entry.IsDir {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  %d files", entry.FileCount)))
+	}
+	b.WriteString("\n\n")
+	count := min(len(entry.CommitIndexes), 4)
+	for i := 0; i < count; i++ {
+		commit := m.commits[entry.CommitIndexes[i]]
+		b.WriteString(fmt.Sprintf("  %s %s  %s\n", hashStyle.Render(commit.ShortHash), mutedStyle.Render(commit.Date), commit.Subject))
+	}
+	if len(entry.CommitIndexes) > count {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ...and %d more commits\n", len(entry.CommitIndexes)-count)))
+	}
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color("8")).
+		Padding(0, 1).
+		Width(m.width)
+
+	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press enter for latest files"))
 }
 
 func requestSummaryLine(requests []store.LinkedRequest) string {
@@ -959,10 +1099,17 @@ func (m *model) loadCommitFiles() {
 	if len(m.commits) == 0 {
 		return
 	}
+	m.loadCommitFilesAt(m.commitIdx)
+}
+
+func (m *model) loadCommitFilesAt(index int) {
+	if index < 0 || index >= len(m.commits) {
+		return
+	}
 	if m.fileCache == nil {
 		m.fileCache = map[string][]string{}
 	}
-	hash := m.commits[m.commitIdx].Hash
+	hash := m.commits[index].Hash
 	if _, ok := m.fileCache[hash]; ok {
 		return
 	}
@@ -972,6 +1119,139 @@ func (m *model) loadCommitFiles() {
 		return
 	}
 	m.fileCache[hash] = files
+}
+
+func (m *model) loadDirectoryEntries() {
+	if len(m.commits) == 0 {
+		m.dirEntries = nil
+		return
+	}
+	if m.fileCache == nil {
+		m.fileCache = map[string][]string{}
+	}
+	stats := map[string]*directoryStats{}
+	for i, commit := range m.commits {
+		m.loadCommitFilesAt(i)
+		if m.err != nil {
+			return
+		}
+		for _, file := range m.fileCache[commit.Hash] {
+			addDirectoryStats(stats, file, i)
+		}
+	}
+	entries := make([]directoryEntry, 0, len(stats))
+	for _, stat := range stats {
+		indexes := make([]int, 0, len(stat.commitIndexes))
+		for index := range stat.commitIndexes {
+			indexes = append(indexes, index)
+		}
+		sort.Ints(indexes)
+		entry := directoryEntry{
+			Path:          stat.path,
+			DisplayName:   filepath.Base(filepath.FromSlash(stat.path)),
+			Depth:         strings.Count(stat.path, "/"),
+			IsDir:         stat.isDir,
+			CommitIndexes: indexes,
+			FileCount:     len(stat.files),
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return directoryEntrySortKey(entries[i]) < directoryEntrySortKey(entries[j])
+	})
+	m.dirEntries = entries
+	m.dirIdx = clamp(m.dirIdx, 0, len(m.dirEntries)-1)
+}
+
+func addDirectoryStats(stats map[string]*directoryStats, file string, commitIndex int) {
+	file = strings.Trim(file, "/")
+	if file == "" {
+		return
+	}
+	ensureDirectoryStats(stats, file, false).commitIndexes[commitIndex] = true
+	for dir := pathDirectory(file); dir != ""; dir = pathDirectory(dir) {
+		stat := ensureDirectoryStats(stats, dir, true)
+		stat.commitIndexes[commitIndex] = true
+		stat.files[file] = true
+	}
+}
+
+func ensureDirectoryStats(stats map[string]*directoryStats, path string, isDir bool) *directoryStats {
+	if stat, ok := stats[path]; ok {
+		if isDir {
+			stat.isDir = true
+		}
+		return stat
+	}
+	stat := &directoryStats{
+		path:          path,
+		isDir:         isDir,
+		commitIndexes: map[int]bool{},
+		files:         map[string]bool{},
+	}
+	if !isDir {
+		stat.files[path] = true
+	}
+	stats[path] = stat
+	return stat
+}
+
+func pathDirectory(path string) string {
+	dir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(path)))
+	if dir == "." {
+		return ""
+	}
+	return dir
+}
+
+func directoryEntrySortKey(entry directoryEntry) string {
+	if entry.IsDir {
+		return entry.Path + "/"
+	}
+	return entry.Path
+}
+
+func (m *model) enterDirectoryEntry() {
+	if len(m.dirEntries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(m.dirEntries) {
+		return
+	}
+	entry := m.dirEntries[m.dirIdx]
+	if len(entry.CommitIndexes) == 0 {
+		return
+	}
+	m.commitIdx = entry.CommitIndexes[0]
+	m.loadCommitFiles()
+	if m.err != nil {
+		return
+	}
+	hash := m.commits[m.commitIdx].Hash
+	files := m.filesForDirectoryEntry(entry, m.fileCache[hash])
+	if len(files) == 0 {
+		return
+	}
+	m.files = files
+	m.fileIdx = 0
+	m.scroll = 0
+	m.mode = modeFiles
+}
+
+func (m model) filesForDirectoryEntry(entry directoryEntry, files []string) []string {
+	if !entry.IsDir {
+		for _, file := range files {
+			if file == entry.Path {
+				return []string{file}
+			}
+		}
+		return nil
+	}
+	prefix := entry.Path + "/"
+	var filtered []string
+	for _, file := range files {
+		if strings.HasPrefix(file, prefix) {
+			filtered = append(filtered, file)
+		}
+	}
+	return filtered
 }
 
 func (m *model) loadSelectedDiff() {
@@ -1248,6 +1528,8 @@ func previewLineLimit(height int) int {
 
 func (m model) modeName() string {
 	switch m.mode {
+	case modeDirectories:
+		return "directories"
 	case modeFiles:
 		return "files"
 	case modeDiff:

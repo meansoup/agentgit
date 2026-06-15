@@ -30,6 +30,7 @@
 ## TUI Navigation
 
 - **Move**: `Up`/`Down`
+- **Toggle Commit/Directory View**: `Tab`
 - **Drill down**: `Right` or `Enter` (Commit → Files → Diff)
 - **Open image**: `Enter` on an image file in the file list
 - **Go back**: `Left` or `Backspace`

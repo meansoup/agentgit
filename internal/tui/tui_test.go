@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/minkuik/agentgit/internal/git"
 	"github.com/minkuik/agentgit/internal/store"
@@ -141,5 +142,97 @@ func TestEnterCommitDoesNotPreloadDiff(t *testing.T) {
 	}
 	if m.diffLines != nil {
 		t.Fatalf("enter commit loaded diff lines: %q", m.diffLines)
+	}
+}
+
+func TestLoadDirectoryEntriesGroupsChangedFiles(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
+			{Hash: "c2", ShortHash: "c2", Subject: "older"},
+		},
+		fileCache: map[string][]string{
+			"c1": {"internal/tui/tui.go", "README.md"},
+			"c2": {"internal/hooks/hooks.go"},
+		},
+	}
+
+	m.loadDirectoryEntries()
+
+	entries := map[string]directoryEntry{}
+	for _, entry := range m.dirEntries {
+		entries[entry.Path] = entry
+	}
+	internal := entries["internal"]
+	if !internal.IsDir {
+		t.Fatalf("internal entry IsDir = false, want true")
+	}
+	if internal.FileCount != 2 {
+		t.Fatalf("internal FileCount = %d, want 2", internal.FileCount)
+	}
+	if got := internal.CommitIndexes; len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("internal CommitIndexes = %v, want [0 1]", got)
+	}
+	readme := entries["README.md"]
+	if readme.IsDir {
+		t.Fatalf("README.md entry IsDir = true, want false")
+	}
+	if got := readme.CommitIndexes; len(got) != 1 || got[0] != 0 {
+		t.Fatalf("README.md CommitIndexes = %v, want [0]", got)
+	}
+}
+
+func TestTabTogglesBetweenCommitAndDirectoryViews(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "c1", ShortHash: "c1", Subject: "change"}},
+		fileCache: map[string][]string{
+			"c1": {"internal/tui/tui.go"},
+		},
+		mode: modeCommits,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got := updated.(model)
+	if got.mode != modeDirectories {
+		t.Fatalf("mode after first tab = %v, want modeDirectories", got.mode)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(model)
+	if got.mode != modeCommits {
+		t.Fatalf("mode after second tab = %v, want modeCommits", got.mode)
+	}
+}
+
+func TestEnterDirectoryEntryOpensLatestMatchingCommitFiles(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
+			{Hash: "c2", ShortHash: "c2", Subject: "older"},
+		},
+		fileCache: map[string][]string{
+			"c1": {"internal/tui/tui.go", "README.md"},
+			"c2": {"internal/hooks/hooks.go"},
+		},
+		mode: modeDirectories,
+	}
+	m.loadDirectoryEntries()
+	for i, entry := range m.dirEntries {
+		if entry.Path == "internal" {
+			m.dirIdx = i
+			break
+		}
+	}
+
+	m.enter(false)
+
+	if m.mode != modeFiles {
+		t.Fatalf("mode = %v, want modeFiles", m.mode)
+	}
+	if m.commitIdx != 0 {
+		t.Fatalf("commitIdx = %d, want 0", m.commitIdx)
+	}
+	if len(m.files) != 1 || m.files[0] != "internal/tui/tui.go" {
+		t.Fatalf("files = %v, want latest internal files only", m.files)
 	}
 }
