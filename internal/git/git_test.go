@@ -73,6 +73,18 @@ func TestUncommittedDiffForUntrackedFile(t *testing.T) {
 	}
 }
 
+func TestBranchReturnsCurrentBranch(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	runGit(t, root, "checkout", "-b", "feature/context")
+
+	if got, want := Branch(root), "feature/context"; got != want {
+		t.Fatalf("Branch() = %q, want %q", got, want)
+	}
+}
+
 func newTestRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

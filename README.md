@@ -29,6 +29,8 @@
 
 ## TUI Navigation
 
+The top context bar shows the base path, Git branch, HEAD, commit count, and dirty file count.
+
 - **Move**: `Up`/`Down`
 - **Toggle Commit/Directory View**: `Tab`
 - **Drill down**: `Right` or `Enter` (Commit → Files → Diff)

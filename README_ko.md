@@ -29,6 +29,8 @@
 
 ## TUI 조작법
 
+상단 컨텍스트 바에는 base path, Git branch, HEAD, 커밋 수, dirty 파일 수가 표시됩니다.
+
 - **이동**: `Up`/`Down`
 - **커밋/디렉토리 뷰 전환**: `Tab`
 - **상세 보기**: `Right` 또는 `Enter` (커밋 → 파일 목록 → Diff)

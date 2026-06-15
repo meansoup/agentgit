@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/minkuik/agentgit/internal/git"
 	"github.com/minkuik/agentgit/internal/store"
@@ -94,6 +95,48 @@ func TestRequestSummaryLineIsSingleLine(t *testing.T) {
 	}
 	if !strings.Contains(got, "Review @internal/tui/tui.go") || !strings.Contains(got, "(+1)") {
 		t.Fatalf("requestSummaryLine missing expected preview details: %q", got)
+	}
+}
+
+func TestHeaderShowsRepoContext(t *testing.T) {
+	m := model{
+		root:   "/Users/example/develop/git/agentgit",
+		branch: "main",
+		head:   "69e67e5",
+		commits: []git.Commit{
+			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "Uncommitted files (2)"},
+			{Hash: "abc", ShortHash: "abc", Subject: "change"},
+		},
+		fileCache: map[string][]string{
+			git.UncommittedHash: {"a.go", "b.go"},
+		},
+		mode:  modeCommits,
+		width: 160,
+	}
+
+	header := ansi.Strip(m.viewHeader())
+
+	for _, want := range []string{"view:commits", "base ", "branch main", "head 69e67e5", "commits 1", "dirty 2"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("header missing %q:\n%s", want, header)
+		}
+	}
+}
+
+func TestContextLineCompactsLongPath(t *testing.T) {
+	m := model{
+		root:   "/very/long/path/that/will/not/fit/inside/the/context/window/agentgit",
+		branch: "main",
+		head:   "abcdef123456",
+	}
+
+	line := m.contextLine(48)
+
+	if width := lipgloss.Width(line); width > 120 {
+		t.Fatalf("contextLine width = %d, unexpectedly wide: %q", width, line)
+	}
+	if !strings.Contains(line, "...") || !strings.Contains(line, "agentgit") {
+		t.Fatalf("contextLine did not compact path usefully: %q", line)
 	}
 }
 

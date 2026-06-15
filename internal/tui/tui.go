@@ -42,6 +42,8 @@ const (
 
 type model struct {
 	root       string
+	branch     string
+	head       string
 	limit      int
 	commits    []git.Commit
 	links      map[string][]store.LinkedRequest
@@ -95,6 +97,7 @@ var (
 	cursorStyle    = lipgloss.NewStyle().Reverse(true)
 	titleStyle     = lipgloss.NewStyle().Bold(true)
 	headerStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
+	contextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0")).Padding(0, 1)
 	footerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
 	statusStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
 	statusAltStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
@@ -117,6 +120,8 @@ func Run(root string, limit int) error {
 	}
 	m := model{
 		root:      root,
+		branch:    git.Branch(root),
+		head:      git.ShortHead(root),
 		limit:     limit,
 		commits:   commits,
 		links:     links,
@@ -231,7 +236,7 @@ func (m model) View() string {
 	}
 	content, focusLine := m.contentView()
 	if m.width <= 0 || m.height <= 0 {
-		return titleStyle.Render(fmt.Sprintf("agentgit %s  diff:%s  f:full  n/p:hunk  q:quit", m.modeName(), m.diffModeName())) + "\n\n" + content
+		return titleStyle.Render(m.headerTitleLine()) + "\n" + m.contextLine(120) + "\n\n" + content
 	}
 	return m.viewFrame(content, focusLine)
 }
@@ -284,7 +289,107 @@ func (m model) viewFrame(content string, focusLine int) string {
 }
 
 func (m model) viewHeader() string {
-	return headerStyle.Width(m.width).Render(fmt.Sprintf("agentgit  %s  diff:%s", m.modeName(), m.diffModeName()))
+	title := headerStyle.Width(m.width).Render(truncateVisible(m.headerTitleLine(), max(0, m.width-2)))
+	context := contextStyle.Width(m.width).Render(truncateVisible(m.contextLine(max(0, m.width-2)), max(0, m.width-2)))
+	return title + "\n" + context
+}
+
+func (m model) headerTitleLine() string {
+	return fmt.Sprintf("agentgit  view:%s  diff:%s  %s", m.modeName(), m.diffModeName(), m.selectionTitle())
+}
+
+func (m model) contextLine(width int) string {
+	base := compactPath(m.root, contextPathWidth(width))
+	return fmt.Sprintf("base %s  branch %s  head %s  commits %d  dirty %d",
+		base,
+		emptyFallback(m.branch, "unknown"),
+		emptyFallback(m.head, "unknown"),
+		len(m.visibleCommits()),
+		m.dirtyFileCount(),
+	)
+}
+
+func (m model) selectionTitle() string {
+	switch m.mode {
+	case modeCommits, modeRequest:
+		if len(m.commits) == 0 || m.commitIdx < 0 || m.commitIdx >= len(m.commits) {
+			return "no commits"
+		}
+		commit := m.commits[m.commitIdx]
+		return truncateVisible(commit.ShortHash+" "+commit.Subject, 80)
+	case modeDirectories:
+		if len(m.dirEntries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(m.dirEntries) {
+			return "no paths"
+		}
+		entry := m.dirEntries[m.dirIdx]
+		path := entry.Path
+		if entry.IsDir {
+			path += "/"
+		}
+		return truncateVisible(path, 80)
+	case modeFiles, modeDiff, modeFullFile:
+		if len(m.files) == 0 || m.fileIdx < 0 || m.fileIdx >= len(m.files) {
+			return "no files"
+		}
+		return truncateVisible(m.files[m.fileIdx], 80)
+	default:
+		return ""
+	}
+}
+
+func (m model) visibleCommits() []git.Commit {
+	commits := m.commits
+	if len(commits) > 0 && commits[0].Hash == git.UncommittedHash {
+		return commits[1:]
+	}
+	return commits
+}
+
+func (m model) dirtyFileCount() int {
+	if len(m.commits) == 0 || m.commits[0].Hash != git.UncommittedHash {
+		return 0
+	}
+	files := m.fileCache[git.UncommittedHash]
+	if len(files) > 0 {
+		return len(files)
+	}
+	return 1
+}
+
+func compactPath(path string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(path) <= width {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if rel, relErr := filepath.Rel(home, path); relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			path = "~/" + filepath.ToSlash(rel)
+		}
+	}
+	if lipgloss.Width(path) <= width {
+		return path
+	}
+	if width <= 3 {
+		return takeVisible(path, width)
+	}
+	return "..." + takeVisibleFromEnd(path, width-3)
+}
+
+func contextPathWidth(width int) int {
+	if width <= 0 {
+		return 40
+	}
+	return clamp(width/2, 24, 80)
+}
+
+func emptyFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (m model) viewCommitDetailsPreview() string {
@@ -548,7 +653,7 @@ func (m model) pageSize() int {
 	if m.height <= 0 {
 		return 20
 	}
-	headerHeight := 1
+	headerHeight := 2
 	footerHeight := 1
 	contentHeaderHeight := 2
 	return max(1, m.height-headerHeight-footerHeight-contentHeaderHeight)
@@ -666,6 +771,8 @@ func (m *model) refresh() {
 		m.err = err
 		return
 	}
+	m.branch = git.Branch(m.root)
+	m.head = git.ShortHead(m.root)
 	m.commits = commits
 	m.links = links
 	m.fileCache = map[string][]string{}
@@ -1517,6 +1624,27 @@ func takeVisible(s string, width int) string {
 		visibleWidth += charWidth
 	}
 	return b.String()
+}
+
+func takeVisibleFromEnd(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	var out []rune
+	var visibleWidth int
+	for i := len(runes) - 1; i >= 0; i-- {
+		charWidth := lipgloss.Width(string(runes[i]))
+		if visibleWidth+charWidth > width {
+			break
+		}
+		out = append(out, runes[i])
+		visibleWidth += charWidth
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return string(out)
 }
 
 func previewLineLimit(height int) int {

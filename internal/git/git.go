@@ -71,6 +71,31 @@ func Head(root string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func ShortHead(root string) string {
+	head, err := Head(root)
+	if err != nil {
+		return "none"
+	}
+	if len(head) <= 12 {
+		return head
+	}
+	return head[:12]
+}
+
+func Branch(root string) string {
+	out, err := Run(root, "branch", "--show-current")
+	if err == nil {
+		if branch := strings.TrimSpace(out); branch != "" {
+			return branch
+		}
+	}
+	head := ShortHead(root)
+	if head == "none" {
+		return "none"
+	}
+	return "detached:" + head
+}
+
 func GitPath(root string, path string) (string, error) {
 	out, err := Run(root, "rev-parse", "--git-path", path)
 	if err != nil {
