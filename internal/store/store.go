@@ -356,6 +356,81 @@ func LinkCommit(requestID int64, commitHash, repoRoot string) error {
 	return err
 }
 
+func DeleteCommitLinks(repoRoot string, commitHashes []string) error {
+	if len(commitHashes) == 0 {
+		return nil
+	}
+	if _, err := Init(); err != nil {
+		return err
+	}
+	db, err := Open()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, hash := range commitHashes {
+		if _, err := tx.Exec(
+			`DELETE FROM request_commits WHERE repo_root = ? AND commit_hash = ?`,
+			repoRoot,
+			hash,
+		); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func MoveCommitLinks(repoRoot string, fromHashes []string, toHash string) error {
+	if len(fromHashes) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(toHash) == "" {
+		return errors.New("target commit hash is empty")
+	}
+	if _, err := Init(); err != nil {
+		return err
+	}
+	db, err := Open()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, hash := range fromHashes {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO request_commits(request_id, commit_hash, repo_root)
+			 SELECT request_id, ?, repo_root
+			 FROM request_commits
+			 WHERE repo_root = ? AND commit_hash = ?`,
+			toHash,
+			repoRoot,
+			hash,
+		); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	for _, hash := range fromHashes {
+		if _, err := tx.Exec(
+			`DELETE FROM request_commits WHERE repo_root = ? AND commit_hash = ?`,
+			repoRoot,
+			hash,
+		); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func RequestsByCommit(repoRoot string) (map[string][]LinkedRequest, error) {
 	if _, err := Init(); err != nil {
 		return nil, err

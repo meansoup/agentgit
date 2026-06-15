@@ -279,3 +279,81 @@ func TestEnterDirectoryEntryOpensLatestMatchingCommitFiles(t *testing.T) {
 		t.Fatalf("files = %v, want latest internal files only", m.files)
 	}
 }
+
+func TestSelectedLatestRangeAllowsContiguousHeadRangeWithUncommittedEntry(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+			{Hash: "older", ShortHash: "older", Subject: "older"},
+			{Hash: "oldest", ShortHash: "oldest", Subject: "oldest"},
+		},
+		selected: map[string]bool{
+			"head":  true,
+			"older": true,
+		},
+	}
+
+	got, err := m.selectedLatestRange()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Hash != "head" || got[1].Hash != "older" {
+		t.Fatalf("selectedLatestRange = %+v, want head and older", got)
+	}
+}
+
+func TestSelectedLatestRangeRejectsSelectionThatSkipsHead(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+			{Hash: "older", ShortHash: "older", Subject: "older"},
+		},
+		selected: map[string]bool{
+			"older": true,
+		},
+	}
+
+	if _, err := m.selectedLatestRange(); err == nil {
+		t.Fatal("selectedLatestRange succeeded without selecting HEAD")
+	}
+}
+
+func TestSelectedLatestRangeRejectsGaps(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+			{Hash: "middle", ShortHash: "middle", Subject: "middle"},
+			{Hash: "older", ShortHash: "older", Subject: "older"},
+		},
+		selected: map[string]bool{
+			"head":  true,
+			"older": true,
+		},
+	}
+
+	if _, err := m.selectedLatestRange(); err == nil {
+		t.Fatal("selectedLatestRange succeeded with a gap")
+	}
+}
+
+func TestToggleSelectedCommitIgnoresUncommittedChanges(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+		},
+		selected:  map[string]bool{},
+		mode:      modeSelect,
+		commitIdx: 0,
+	}
+
+	m.toggleSelectedCommit()
+
+	if m.selected[git.UncommittedHash] {
+		t.Fatal("uncommitted entry was selected")
+	}
+	if !strings.Contains(m.notice, "uncommitted") {
+		t.Fatalf("notice = %q, want uncommitted warning", m.notice)
+	}
+}

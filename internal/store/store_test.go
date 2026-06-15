@@ -79,3 +79,71 @@ func TestFindActiveRequestBySession(t *testing.T) {
 		t.Fatalf("FindActiveRequestBySession id = %d, want %d", req.ID, wantID)
 	}
 }
+
+func TestMoveCommitLinksMovesAllRequestsToNewCommit(t *testing.T) {
+	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
+
+	firstID, err := CreateRequest("codex", "codex", "gpt", "one", "/repo", "session-1", "turn", "head", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondID, err := CreateRequest("gemini", "gemini", "gemini", "two", "/repo", "session-2", "turn", "head", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkCommit(firstID, "old-a", "/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkCommit(secondID, "old-b", "/repo"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveCommitLinks("/repo", []string{"old-a", "old-b"}, "new"); err != nil {
+		t.Fatal(err)
+	}
+
+	links, err := RequestsByCommit("/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links["old-a"]) != 0 || len(links["old-b"]) != 0 {
+		t.Fatalf("old commit links were retained: %+v", links)
+	}
+	got := links["new"]
+	if len(got) != 2 {
+		t.Fatalf("new commit links = %+v, want 2 requests", got)
+	}
+	gotIDs := map[int64]bool{got[0].RequestID: true, got[1].RequestID: true}
+	if !gotIDs[firstID] || !gotIDs[secondID] {
+		t.Fatalf("new commit linked request ids = %+v, want %d and %d", gotIDs, firstID, secondID)
+	}
+}
+
+func TestDeleteCommitLinksRemovesOnlySelectedHashes(t *testing.T) {
+	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
+
+	reqID, err := CreateRequest("codex", "codex", "gpt", "one", "/repo", "session", "turn", "head", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hash := range []string{"remove", "keep"} {
+		if err := LinkCommit(reqID, hash, "/repo"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := DeleteCommitLinks("/repo", []string{"remove"}); err != nil {
+		t.Fatal(err)
+	}
+
+	links, err := RequestsByCommit("/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links["remove"]) != 0 {
+		t.Fatalf("removed hash still linked: %+v", links["remove"])
+	}
+	if len(links["keep"]) != 1 {
+		t.Fatalf("kept hash links = %+v, want 1", links["keep"])
+	}
+}

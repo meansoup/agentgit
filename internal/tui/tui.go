@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,7 @@ const (
 	modeDiff
 	modeFullFile
 	modeRequest
+	modeSelect
 )
 
 type diffMode int
@@ -54,8 +56,10 @@ type model struct {
 	fileCache  map[string][]string
 	diffCache  map[string][]string
 	fullCache  map[string][]string
+	selected   map[string]bool
 	mode       mode
 	diffMode   diffMode
+	pending    selectAction
 	commitIdx  int
 	dirIdx     int
 	fileIdx    int
@@ -63,7 +67,16 @@ type model struct {
 	width      int
 	height     int
 	err        error
+	notice     string
 }
+
+type selectAction int
+
+const (
+	selectActionNone selectAction = iota
+	selectActionRemove
+	selectActionSquash
+)
 
 type imageOpenMsg struct {
 	err error
@@ -128,6 +141,7 @@ func Run(root string, limit int) error {
 		fileCache: map[string][]string{},
 		diffCache: map[string][]string{},
 		fullCache: map[string][]string{},
+		selected:  map[string]bool{},
 	}
 	m.loadCommitFiles()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -188,10 +202,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
+			if m.mode == modeSelect && m.pending != selectActionNone {
+				m.cancelPendingSelectAction()
+				return m, nil
+			}
 			return m, tea.Quit
 		case "up":
+			m.clearNotice()
 			m.move(-1)
 		case "down":
+			m.clearNotice()
 			m.move(1)
 		case "pgup":
 			m.page(-1)
@@ -202,11 +222,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m, m.enter(true)
 		case "tab":
+			m.clearNotice()
 			m.toggleTopLevelView()
 		case "left", "backspace":
+			m.clearNotice()
 			m.back()
 		case "m":
-			if m.diffMode == diffUnified {
+			if m.mode == modeSelect {
+				m.requestSelectAction(selectActionSquash)
+			} else if m.diffMode == diffUnified {
 				m.diffMode = diffSplit
 			} else {
 				m.diffMode = diffUnified
@@ -214,13 +238,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			m.toggleFullFile()
 		case "r":
+			m.clearNotice()
 			m.refresh()
 		case "v":
 			m.toggleRequestFull()
 		case "n":
-			m.jumpHunk(1)
+			if m.mode == modeSelect && m.pending != selectActionNone {
+				m.cancelPendingSelectAction()
+			} else {
+				m.jumpHunk(1)
+			}
 		case "p":
 			m.jumpHunk(-1)
+		case "s":
+			m.clearNotice()
+			m.toggleSelectMode()
+		case " ":
+			if m.mode == modeSelect {
+				m.toggleSelectedCommit()
+			}
+		case "x":
+			if m.mode == modeSelect {
+				m.requestSelectAction(selectActionRemove)
+			}
+		case "y":
+			if m.mode == modeSelect {
+				m.confirmSelectAction()
+			}
 		}
 	case imageOpenMsg:
 		if msg.err != nil {
@@ -255,6 +299,8 @@ func (m model) contentView() (string, int) {
 		return m.viewFullFile(), 2
 	case modeRequest:
 		return m.viewRequestFull(), 2
+	case modeSelect:
+		return m.viewSelectList(m.width), m.commitFocusLine()
 	default:
 		return "", 0
 	}
@@ -267,6 +313,8 @@ func (m model) viewFrame(content string, focusLine int) string {
 	var staticTop string
 	if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
+	} else if m.mode == modeSelect {
+		staticTop = m.viewSelectDetailsPreview()
 	} else if m.mode == modeDirectories {
 		staticTop = m.viewDirectoryDetailsPreview()
 	} else if m.mode == modeFiles {
@@ -311,7 +359,7 @@ func (m model) contextLine(width int) string {
 
 func (m model) selectionTitle() string {
 	switch m.mode {
-	case modeCommits, modeRequest:
+	case modeCommits, modeRequest, modeSelect:
 		if len(m.commits) == 0 || m.commitIdx < 0 || m.commitIdx >= len(m.commits) {
 			return "no commits"
 		}
@@ -531,6 +579,11 @@ func (m model) helpText() string {
 	switch m.mode {
 	case modeCommits:
 		return "up/down move  enter/right files  tab directories  v request  r refresh  q quit"
+	case modeSelect:
+		if m.pending != selectActionNone {
+			return "y confirm  n/esc cancel  q quit"
+		}
+		return "up/down move  space select  x remove  m merge  s/left back  q quit"
 	case modeDirectories:
 		return "up/down move  enter/right latest files  tab commits  r refresh  q quit"
 	case modeFiles:
@@ -574,8 +627,25 @@ func (m model) shortcuts() []shortcut {
 			{"up/down", "move"},
 			{"enter/right", "files"},
 			{"tab", "dirs"},
+			{"s", "select"},
 			{"v", "request"},
 			{"r", "refresh"},
+			{"q", "quit"},
+		}
+	case modeSelect:
+		if m.pending != selectActionNone {
+			return []shortcut{
+				{"y", "confirm"},
+				{"n/esc", "cancel"},
+				{"q", "quit"},
+			}
+		}
+		return []shortcut{
+			{"up/down", "move"},
+			{"space", "select"},
+			{"x", "remove"},
+			{"m", "merge"},
+			{"s/left", "back"},
 			{"q", "quit"},
 		}
 	case modeDirectories:
@@ -633,6 +703,9 @@ func (m *model) move(delta int) {
 	case modeCommits:
 		m.commitIdx = clamp(m.commitIdx+delta, 0, len(m.commits)-1)
 		m.loadCommitFiles()
+	case modeSelect:
+		m.commitIdx = clamp(m.commitIdx+delta, 0, len(m.commits)-1)
+		m.pending = selectActionNone
 	case modeDirectories:
 		m.dirIdx = clamp(m.dirIdx+delta, 0, len(m.dirEntries)-1)
 	case modeFiles:
@@ -705,6 +778,8 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		m.mode = modeFiles
+	case modeSelect:
+		m.toggleSelectedCommit()
 	case modeDirectories:
 		m.enterDirectoryEntry()
 	case modeFiles:
@@ -730,10 +805,16 @@ func (m *model) back() {
 		m.mode = modeFiles
 	case modeFiles:
 		m.mode = modeCommits
+	case modeSelect:
+		m.mode = modeCommits
+		m.pending = selectActionNone
 	}
 }
 
 func (m *model) toggleTopLevelView() {
+	if m.mode == modeSelect {
+		return
+	}
 	if m.mode == modeDirectories {
 		m.mode = modeCommits
 		m.scroll = 0
@@ -778,6 +859,8 @@ func (m *model) refresh() {
 	m.fileCache = map[string][]string{}
 	m.diffCache = map[string][]string{}
 	m.fullCache = map[string][]string{}
+	m.selected = keepExistingSelections(m.selected, commits)
+	m.pending = selectActionNone
 	m.dirEntries = nil
 	m.diffLines = nil
 	m.fullLines = nil
@@ -808,7 +891,7 @@ func (m *model) refresh() {
 		m.mode = modeCommits
 		return
 	}
-	if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest {
+	if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest && m.mode != modeSelect {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		for i, file := range m.files {
@@ -837,6 +920,253 @@ func (m *model) toggleRequestFull() {
 		m.mode = modeCommits
 		m.scroll = 0
 	}
+}
+
+func (m *model) toggleSelectMode() {
+	if m.mode == modeCommits {
+		if m.selected == nil {
+			m.selected = map[string]bool{}
+		}
+		m.mode = modeSelect
+		m.pending = selectActionNone
+		m.scroll = 0
+		return
+	}
+	if m.mode == modeSelect {
+		m.mode = modeCommits
+		m.pending = selectActionNone
+		m.scroll = 0
+	}
+}
+
+func (m *model) toggleSelectedCommit() {
+	if m.mode != modeSelect || len(m.commits) == 0 || m.commitIdx < 0 || m.commitIdx >= len(m.commits) {
+		return
+	}
+	m.pending = selectActionNone
+	commit := m.commits[m.commitIdx]
+	if commit.Hash == git.UncommittedHash {
+		m.notice = "uncommitted changes cannot be selected"
+		return
+	}
+	if m.selected == nil {
+		m.selected = map[string]bool{}
+	}
+	if m.selected[commit.Hash] {
+		delete(m.selected, commit.Hash)
+	} else {
+		m.selected[commit.Hash] = true
+	}
+	m.clearNotice()
+}
+
+func (m *model) requestSelectAction(action selectAction) {
+	if m.mode != modeSelect {
+		return
+	}
+	if _, err := m.validateSelectAction(action); err != nil {
+		m.notice = err.Error()
+		m.pending = selectActionNone
+		return
+	}
+	m.pending = action
+	m.notice = "this will rewrite the latest commits"
+}
+
+func (m *model) confirmSelectAction() {
+	if m.mode != modeSelect || m.pending == selectActionNone {
+		return
+	}
+	action := m.pending
+	selected, err := m.validateSelectAction(action)
+	if err != nil {
+		m.notice = err.Error()
+		m.pending = selectActionNone
+		return
+	}
+	base, err := git.Parent(m.root, selected[len(selected)-1].Hash)
+	if err != nil {
+		m.notice = err.Error()
+		m.pending = selectActionNone
+		return
+	}
+	hashes := commitHashes(selected)
+	switch action {
+	case selectActionRemove:
+		if err := git.ResetHard(m.root, base); err != nil {
+			m.notice = "remove failed: " + err.Error()
+			m.pending = selectActionNone
+			return
+		}
+		if err := store.DeleteCommitLinks(m.root, hashes); err != nil {
+			m.notice = "removed commits, but db cleanup failed: " + err.Error()
+			m.pending = selectActionNone
+			return
+		}
+		m.selected = map[string]bool{}
+		m.pending = selectActionNone
+		m.refreshWithNotice(fmt.Sprintf("removed %d commits", len(selected)))
+	case selectActionSquash:
+		newHash, err := git.SquashSince(m.root, base, squashCommitMessage(selected))
+		if err != nil {
+			m.notice = "merge failed: " + err.Error()
+			m.pending = selectActionNone
+			return
+		}
+		if err := store.MoveCommitLinks(m.root, hashes, newHash); err != nil {
+			m.notice = "merged commits, but db link update failed: " + err.Error()
+			m.pending = selectActionNone
+			return
+		}
+		m.selected = map[string]bool{}
+		m.pending = selectActionNone
+		m.refreshWithNotice(fmt.Sprintf("merged %d commits into %s", len(selected), shortHash(newHash)))
+	}
+}
+
+func (m *model) validateSelectAction(action selectAction) ([]git.Commit, error) {
+	selected, err := m.selectedLatestRange()
+	if err != nil {
+		return nil, err
+	}
+	if action == selectActionSquash && len(selected) < 2 {
+		return nil, errors.New("select at least 2 latest commits to merge")
+	}
+	clean, err := git.IsWorkingTreeClean(m.root)
+	if err != nil {
+		return nil, err
+	}
+	if !clean {
+		return nil, errors.New("working tree must be clean")
+	}
+	if _, err := git.Parent(m.root, selected[len(selected)-1].Hash); err != nil {
+		return nil, err
+	}
+	return selected, nil
+}
+
+func (m model) selectedLatestRange() ([]git.Commit, error) {
+	if m.selectedCount() == 0 {
+		return nil, errors.New("select one or more commits")
+	}
+	firstReal := -1
+	for i, commit := range m.commits {
+		if commit.Hash != git.UncommittedHash {
+			firstReal = i
+			break
+		}
+	}
+	if firstReal < 0 {
+		return nil, errors.New("no committed commits to select")
+	}
+	maxSelected := -1
+	for i, commit := range m.commits {
+		if !m.selected[commit.Hash] {
+			continue
+		}
+		if commit.Hash == git.UncommittedHash {
+			return nil, errors.New("uncommitted changes cannot be selected")
+		}
+		if i < firstReal {
+			return nil, errors.New("selection must start at HEAD")
+		}
+		if i > maxSelected {
+			maxSelected = i
+		}
+	}
+	if maxSelected < firstReal {
+		return nil, errors.New("selection must start at HEAD")
+	}
+	for i := firstReal; i <= maxSelected; i++ {
+		if !m.selected[m.commits[i].Hash] {
+			return nil, errors.New("selection must include every latest commit up to the oldest selected commit")
+		}
+	}
+	return append([]git.Commit(nil), m.commits[firstReal:maxSelected+1]...), nil
+}
+
+func (m model) selectedCount() int {
+	count := 0
+	for _, selected := range m.selected {
+		if selected {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *model) cancelPendingSelectAction() {
+	m.pending = selectActionNone
+	m.notice = "cancelled"
+}
+
+func (m *model) clearNotice() {
+	m.notice = ""
+}
+
+func (m *model) refreshWithNotice(notice string) {
+	m.refresh()
+	if m.err == nil {
+		m.notice = notice
+	}
+}
+
+func (m model) pendingActionName() string {
+	switch m.pending {
+	case selectActionRemove:
+		return "remove"
+	case selectActionSquash:
+		return "merge"
+	default:
+		return ""
+	}
+}
+
+func commitHashes(commits []git.Commit) []string {
+	hashes := make([]string, 0, len(commits))
+	for _, commit := range commits {
+		hashes = append(hashes, commit.Hash)
+	}
+	return hashes
+}
+
+func squashCommitMessage(commits []git.Commit) []string {
+	if len(commits) == 0 {
+		return []string{"Squash selected commits"}
+	}
+	oldest := commits[len(commits)-1]
+	subject := strings.TrimSpace(oldest.Subject)
+	if subject == "" {
+		subject = "Squash selected commits"
+	}
+	var body strings.Builder
+	body.WriteString(fmt.Sprintf("Squashed %d commits:", len(commits)))
+	for i := len(commits) - 1; i >= 0; i-- {
+		body.WriteString("\n\n- ")
+		body.WriteString(commits[i].ShortHash)
+		body.WriteString(" ")
+		body.WriteString(commits[i].Subject)
+	}
+	return []string{subject, body.String()}
+}
+
+func keepExistingSelections(selected map[string]bool, commits []git.Commit) map[string]bool {
+	if len(selected) == 0 {
+		return map[string]bool{}
+	}
+	exists := map[string]bool{}
+	for _, commit := range commits {
+		if commit.Hash != git.UncommittedHash {
+			exists[commit.Hash] = true
+		}
+	}
+	kept := map[string]bool{}
+	for hash := range selected {
+		if exists[hash] {
+			kept[hash] = true
+		}
+	}
+	return kept
 }
 
 func (m model) viewRequestFull() string {
@@ -925,6 +1255,73 @@ func (m model) viewCommitsList(width int) string {
 		}
 	}
 	return b.String()
+}
+
+func (m model) viewSelectList(width int) string {
+	if len(m.commits) == 0 {
+		return mutedStyle.Render("no commits")
+	}
+	var b strings.Builder
+	for i, commit := range m.commits {
+		box := "[ ]"
+		if m.selected[commit.Hash] {
+			box = "[x]"
+		}
+		if commit.Hash == git.UncommittedHash {
+			box = "[-]"
+		}
+		line := fmt.Sprintf("%s %s %s  %s", markerStyle.Render(box), hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
+		line = truncateVisible(line, width)
+		if i == m.commitIdx {
+			line = cursorStyle.Render(line)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+		if summary := requestSummaryLine(m.links[commit.Hash]); summary != "" {
+			b.WriteString(markerStyle.Render("  ● "))
+			b.WriteString(truncateVisible(summary, max(0, width-4)))
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func (m model) viewSelectDetailsPreview() string {
+	var b strings.Builder
+	count := m.selectedCount()
+	b.WriteString(titleStyle.Render("Select Mode"))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("%d commits selected", count))
+	if count > 0 {
+		if commits, err := m.selectedLatestRange(); err == nil {
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("  latest %d commits", len(commits))))
+		} else {
+			b.WriteString("  " + mutedStyle.Render(err.Error()))
+		}
+	}
+	b.WriteString("\n\n")
+	if m.pending != selectActionNone {
+		b.WriteString(statusAltStyle.Render("Confirm " + m.pendingActionName()))
+		b.WriteString(" ")
+		b.WriteString(mutedStyle.Render("press y to continue or n/esc to cancel"))
+		b.WriteString("\n")
+	} else {
+		b.WriteString(mutedStyle.Render("space selects commits. remove/merge require a contiguous range starting at HEAD."))
+		b.WriteString("\n")
+	}
+	if m.notice != "" {
+		b.WriteString("\n")
+		b.WriteString(markerStyle.Render(m.notice))
+		b.WriteString("\n")
+	}
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color("8")).
+		Padding(0, 1).
+		Width(m.width)
+
+	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), ""))
 }
 
 func (m model) viewDirectoryList(width int) string {
@@ -1666,6 +2063,8 @@ func (m model) modeName() string {
 		return "full"
 	case modeRequest:
 		return "request"
+	case modeSelect:
+		return "select"
 	default:
 		return "commits"
 	}

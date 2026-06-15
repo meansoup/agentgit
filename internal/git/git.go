@@ -82,6 +82,17 @@ func ShortHead(root string) string {
 	return head[:12]
 }
 
+func Parent(root string, commitHash string) (string, error) {
+	if commitHash == "" || commitHash == UncommittedHash {
+		return "", errors.New("commit does not have a parent")
+	}
+	out, err := Run(root, "rev-parse", commitHash+"^")
+	if err != nil {
+		return "", errors.New("selected range includes the root commit")
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func Branch(root string) string {
 	out, err := Run(root, "branch", "--show-current")
 	if err == nil {
@@ -156,6 +167,14 @@ func StatusPaths(root string) (map[string]bool, error) {
 	return paths, nil
 }
 
+func IsWorkingTreeClean(root string) (bool, error) {
+	out, err := Run(root, "status", "--porcelain=v1")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "", nil
+}
+
 func Commits(root string, limit int) ([]Commit, error) {
 	format := "%H%x1f%h%x1f%ad%x1f%s"
 	out, err := Run(root, "log", fmt.Sprintf("--max-count=%d", limit), "--date=format:%m-%d %H:%M", "--pretty=format:"+format)
@@ -200,6 +219,40 @@ func CommitsWithUncommitted(root string, limit int) ([]Commit, error) {
 		Subject:   fmt.Sprintf("Uncommitted files (%d)", len(files)),
 	}
 	return append([]Commit{uncommitted}, commits...), nil
+}
+
+func ResetHard(root string, ref string) error {
+	if strings.TrimSpace(ref) == "" {
+		return errors.New("reset target is empty")
+	}
+	_, err := Run(root, "reset", "--hard", ref)
+	return err
+}
+
+func SquashSince(root string, baseRef string, message []string) (string, error) {
+	if strings.TrimSpace(baseRef) == "" {
+		return "", errors.New("squash base is empty")
+	}
+	if len(message) == 0 || strings.TrimSpace(message[0]) == "" {
+		return "", errors.New("squash commit message is empty")
+	}
+	tree, err := Run(root, "rev-parse", "HEAD^{tree}")
+	if err != nil {
+		return "", err
+	}
+	args := []string{"commit-tree", strings.TrimSpace(tree), "-p", baseRef}
+	for _, part := range message {
+		args = append(args, "-m", part)
+	}
+	out, err := Run(root, args...)
+	if err != nil {
+		return "", err
+	}
+	newHash := strings.TrimSpace(out)
+	if err := ResetHard(root, newHash); err != nil {
+		return "", err
+	}
+	return newHash, nil
 }
 
 func ChangedFiles(root string, commitHash string) ([]string, error) {

@@ -85,6 +85,89 @@ func TestBranchReturnsCurrentBranch(t *testing.T) {
 	}
 }
 
+func TestResetHardDropsLatestCommitChanges(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	writeFile(t, root, "tracked.txt", "latest\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "latest")
+	latest, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := Parent(root, latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ResetHard(root, base); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "base\n" {
+		t.Fatalf("tracked.txt = %q, want base content", raw)
+	}
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != base {
+		t.Fatalf("HEAD = %s, want %s", head, base)
+	}
+}
+
+func TestSquashSinceCombinesLatestCommits(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	writeFile(t, root, "one.txt", "one\n")
+	runGit(t, root, "add", "one.txt")
+	runGit(t, root, "commit", "-m", "one")
+	oldestSelected, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "two.txt", "two\n")
+	runGit(t, root, "add", "two.txt")
+	runGit(t, root, "commit", "-m", "two")
+	base, err := Parent(root, oldestSelected)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newHash, err := SquashSince(root, base, []string{"one", "Squashed 2 commits"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != newHash {
+		t.Fatalf("HEAD = %s, want new squash hash %s", head, newHash)
+	}
+	log, err := Run(root, "log", "--pretty=%s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimSpace(log), "\n"); len(got) != 2 || got[0] != "one" || got[1] != "initial" {
+		t.Fatalf("log subjects = %q, want squashed commit plus initial", log)
+	}
+	for _, path := range []string{"one.txt", "two.txt"} {
+		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
+			t.Fatalf("%s missing after squash: %v", path, err)
+		}
+	}
+}
+
 func newTestRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
