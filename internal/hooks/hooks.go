@@ -578,6 +578,9 @@ func handleGeminiAfterAgent(input geminiHookInput, root string) error {
 	if err != nil || !ok {
 		return err
 	}
+	if err := autoCommitRequest(root, req); err != nil {
+		return err
+	}
 	return store.FinishRequest(req.ID)
 }
 
@@ -611,7 +614,58 @@ func handleCodexStop(input codexHookInput, root string) error {
 	if err != nil || !ok {
 		return err
 	}
+	if err := autoCommitRequest(root, req); err != nil {
+		return err
+	}
 	return store.FinishRequest(req.ID)
+}
+
+func autoCommitRequest(root string, req store.Request) error {
+	status, err := git.StatusPaths(root)
+	if err != nil {
+		return err
+	}
+	if len(status) == 0 {
+		return nil
+	}
+	if len(req.BaselinePaths) > 0 {
+		return nil
+	}
+	if _, err := git.Run(root, "add", "-A"); err != nil {
+		return err
+	}
+	subject := requestCommitSubject(req.Message)
+	body := fmt.Sprintf("Agent: %s\nModel: %s\nRequest-ID: %d", req.AgentName, req.Model, req.ID)
+	if _, err := git.Run(root, "commit", "-m", subject, "-m", body); err != nil {
+		_, _ = git.Run(root, "reset")
+		return err
+	}
+	hash, err := git.Head(root)
+	if err != nil {
+		return err
+	}
+	return store.LinkCommit(req.ID, hash, root)
+}
+
+func requestCommitSubject(message string) string {
+	subject := firstNonEmptyLine(message)
+	if subject == "" {
+		subject = "Agent request changes"
+	}
+	subject = strings.Join(strings.Fields(subject), " ")
+	if len(subject) > 72 {
+		subject = subject[:69] + "..."
+	}
+	return "agentgit: " + subject
+}
+
+func firstNonEmptyLine(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func HandlePostCommit(cwd string) error {
