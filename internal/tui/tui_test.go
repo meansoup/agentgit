@@ -158,14 +158,38 @@ func TestHelpDialogClosesWithoutQuitting(t *testing.T) {
 		height:   30,
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	got := updated.(model)
 
 	if got.helpOpen {
 		t.Fatal("helpOpen = true, want false")
 	}
 	if cmd != nil {
-		t.Fatal("q while help is open returned a quit command")
+		t.Fatal("esc while help is open returned a quit command")
+	}
+}
+
+func TestQDoesNotQuit(t *testing.T) {
+	m := model{mode: modeCommits}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	got := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("q returned a quit command")
+	}
+	if got.mode != modeCommits {
+		t.Fatalf("mode = %v, want modeCommits", got.mode)
+	}
+}
+
+func TestCtrlCQuits(t *testing.T) {
+	m := model{mode: modeCommits}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	if cmd == nil {
+		t.Fatal("ctrl+c did not return a quit command")
 	}
 }
 

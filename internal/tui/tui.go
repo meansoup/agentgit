@@ -203,7 +203,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.helpOpen {
 			switch msg.String() {
-			case "?", "esc", "q", "enter":
+			case "?", "esc", "enter":
 				m.helpOpen = false
 				return m, nil
 			case "ctrl+c":
@@ -213,12 +213,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
 			if m.mode == modeSelect && m.pending != selectActionNone {
 				m.cancelPendingSelectAction()
 				return m, nil
 			}
-			return m, tea.Quit
 		case "up":
 			m.clearNotice()
 			m.move(-1)
@@ -599,27 +600,27 @@ func (m model) fitPreviewContent(content string, height int, overflow string) st
 func (m model) helpText() string {
 	switch m.mode {
 	case modeCommits:
-		return "up/down move  enter/right files  tab directories  v request  r refresh  q quit"
+		return "up/down move  enter/right files  tab directories  v request  r refresh  ctrl+c quit"
 	case modeSelect:
 		if m.pending != selectActionNone {
-			return "y confirm  n/esc cancel  q quit"
+			return "y confirm  n/esc cancel  ctrl+c quit"
 		}
-		return "up/down move  space select  x remove  m merge  s/left back  q quit"
+		return "up/down move  space select  x remove  m merge  s/left back  ctrl+c quit"
 	case modeDirectories:
-		return "up/down move  enter/right latest files  tab commits  r refresh  q quit"
+		return "up/down move  enter/right latest files  tab commits  r refresh  ctrl+c quit"
 	case modeFiles:
 		if m.selectedFileIsImage() {
-			return "up/down move  enter image  right diff  left/backspace back  r refresh  q quit"
+			return "up/down move  enter image  right diff  left/backspace back  r refresh  ctrl+c quit"
 		}
-		return "up/down move  enter/right diff  left/backspace back  r refresh  q quit"
+		return "up/down move  enter/right diff  left/backspace back  r refresh  ctrl+c quit"
 	case modeDiff:
-		return "up/down scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  left/backspace back  r refresh  q quit"
+		return "up/down scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  left/backspace back  r refresh  ctrl+c quit"
 	case modeFullFile:
-		return "up/down scroll  pgup/pgdown page  f diff  left/backspace back  r refresh  q quit"
+		return "up/down scroll  pgup/pgdown page  f diff  left/backspace back  r refresh  ctrl+c quit"
 	case modeRequest:
-		return "up/down scroll  pgup/pgdown page  v back  left/backspace back  r refresh  q quit"
+		return "up/down scroll  pgup/pgdown page  v back  left/backspace back  r refresh  ctrl+c quit"
 	default:
-		return "q quit"
+		return "ctrl+c quit"
 	}
 }
 
@@ -652,14 +653,14 @@ func (m model) shortcuts() []shortcut {
 			{"s", "select"},
 			{"v", "request"},
 			{"r", "refresh"},
-			{"q", "quit"},
+			{"ctrl+c", "quit"},
 		}
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return []shortcut{
 				{"y", "confirm"},
 				{"n/esc", "cancel"},
-				{"q", "quit"},
+				{"ctrl+c", "quit"},
 			}
 		}
 		return []shortcut{
@@ -668,7 +669,7 @@ func (m model) shortcuts() []shortcut {
 			{"x", "remove"},
 			{"m", "merge"},
 			{"s/left", "back"},
-			{"q", "quit"},
+			{"ctrl+c", "quit"},
 		}
 	case modeDirectories:
 		return []shortcut{
@@ -676,7 +677,7 @@ func (m model) shortcuts() []shortcut {
 			{"enter/right", "files"},
 			{"tab", "commits"},
 			{"r", "refresh"},
-			{"q", "quit"},
+			{"ctrl+c", "quit"},
 		}
 	case modeFiles:
 		items := []shortcut{{"up/down", "move"}}
@@ -685,7 +686,7 @@ func (m model) shortcuts() []shortcut {
 		} else {
 			items = append(items, shortcut{"enter/right", "diff"})
 		}
-		return append(items, shortcut{"left", "back"}, shortcut{"r", "refresh"}, shortcut{"q", "quit"})
+		return append(items, shortcut{"left", "back"}, shortcut{"r", "refresh"}, shortcut{"ctrl+c", "quit"})
 	case modeDiff:
 		return []shortcut{
 			{"up/down", "scroll"},
@@ -695,7 +696,7 @@ func (m model) shortcuts() []shortcut {
 			{"f", "full"},
 			{"left", "back"},
 			{"r", "refresh"},
-			{"q", "quit"},
+			{"ctrl+c", "quit"},
 		}
 	case modeFullFile:
 		return []shortcut{
@@ -704,7 +705,7 @@ func (m model) shortcuts() []shortcut {
 			{"f", "diff"},
 			{"left", "back"},
 			{"r", "refresh"},
-			{"q", "quit"},
+			{"ctrl+c", "quit"},
 		}
 	case modeRequest:
 		return []shortcut{
@@ -713,10 +714,10 @@ func (m model) shortcuts() []shortcut {
 			{"v", "back"},
 			{"left", "back"},
 			{"r", "refresh"},
-			{"q", "quit"},
+			{"ctrl+c", "quit"},
 		}
 	default:
-		return []shortcut{{"q", "quit"}}
+		return []shortcut{{"ctrl+c", "quit"}}
 	}
 }
 
@@ -752,7 +753,7 @@ func (m model) viewHelpDialog(width int, height int) string {
 
 	var lines []string
 	lines = append(lines, titleStyle.Render("Help"))
-	lines = append(lines, mutedStyle.Render("view: "+m.modeName()+"  close: ?, esc, q, enter"))
+	lines = append(lines, mutedStyle.Render("view: "+m.modeName()+"  close: ?, esc, enter"))
 	lines = append(lines, strings.Repeat("─", contentWidth))
 	for _, entry := range entries {
 		keyCell := keyStyle.Render(padPlain(entry.keys, keyWidth))
@@ -799,14 +800,14 @@ func (m model) helpEntries() []helpEntry {
 			{"s", "Select mode", "choose latest commits for remove or merge"},
 			{"v", "Request details", "show full linked request text"},
 			{"r", "Refresh", "reload commits and request links"},
-			{"q", "Quit", "exit agentgit"},
+			{"ctrl+c", "Quit", "exit agentgit"},
 		}, entries...)
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return append([]helpEntry{
 				{"y", "Confirm", "rewrite the selected latest commits"},
 				{"n/esc", "Cancel", "return to select mode without rewriting"},
-				{"q", "Close prompt", "cancel the pending action"},
+				{"ctrl+c", "Quit", "exit agentgit"},
 			}, entries...)
 		}
 		return append([]helpEntry{
@@ -823,7 +824,7 @@ func (m model) helpEntries() []helpEntry {
 			{"enter/right", "Open latest files", "show matching files from the latest commit touching this path"},
 			{"tab", "Commits", "switch back to commit list"},
 			{"r", "Refresh", "reload commits and request links"},
-			{"q", "Quit", "exit agentgit"},
+			{"ctrl+c", "Quit", "exit agentgit"},
 		}, entries...)
 	case modeFiles:
 		if m.selectedFileIsImage() {
