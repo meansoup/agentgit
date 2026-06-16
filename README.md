@@ -34,6 +34,7 @@ The top context bar shows the base path, Git branch, HEAD, commit count, and dir
 - **Move**: `Up`/`Down`
 - **Toggle Commit/Directory View**: `Tab`
 - **Select latest commits**: `s`, then `Space` to select, `x` to remove, `m` to merge, `y` to confirm
+- **Directory folders**: `Enter`/`Right` toggles folders and opens files
 - **Drill down**: `Right` or `Enter` (Commit → Files → Diff)
 - **Open image**: `Enter` on an image file in the file list
 - **Go back**: `Left` or `Backspace`
@@ -48,7 +49,7 @@ The top context bar shows the base path, Git branch, HEAD, commit count, and dir
 
 - **Hooks**: `agentgit setup` installs lifecycle hooks that trigger on agent events.
 - **Auto Commit + Linking**: After an agent request, `agentgit` commits new working tree changes automatically when the request started from a clean tree, then links the commit to that request. Commits created manually during a request are also linked.
-- **Select Mode**: Remove or merge only a clean, contiguous range of latest commits starting at `HEAD`. Remove uses `git reset --hard`; merge squashes the selected commits and moves their request links to the new commit in the local DB.
+- **Select Mode**: Remove or merge only a contiguous range of latest commits starting at `HEAD`. Remove can also discard selected uncommitted changes; merge squashes selected commits and moves their request links to the new commit in the local DB.
 - **Local DB**: Metadata is stored in `~/.local/share/agentgit/agentgit.sqlite3`.
 - **Transparency**: Your existing workflow remains unchanged. `agentgit` works silently in the background.
 

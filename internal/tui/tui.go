@@ -53,6 +53,7 @@ type model struct {
 	diffLines  []string
 	fullLines  []string
 	dirEntries []directoryEntry
+	expanded   map[string]bool
 	fileCache  map[string][]string
 	diffCache  map[string][]string
 	fullCache  map[string][]string
@@ -143,6 +144,7 @@ func Run(root string, limit int) error {
 		diffCache: map[string][]string{},
 		fullCache: map[string][]string{},
 		selected:  map[string]bool{},
+		expanded:  map[string]bool{},
 	}
 	m.loadCommitFiles()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -388,10 +390,11 @@ func (m model) selectionTitle() string {
 		commit := m.commits[m.commitIdx]
 		return truncateVisible(commit.ShortHash+" "+commit.Subject, 80)
 	case modeDirectories:
-		if len(m.dirEntries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(m.dirEntries) {
+		entries := m.visibleDirectoryEntries()
+		if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
 			return "no paths"
 		}
-		entry := m.dirEntries[m.dirIdx]
+		entry := entries[m.dirIdx]
 		path := entry.Path
 		if entry.IsDir {
 			path += "/"
@@ -607,7 +610,7 @@ func (m model) helpText() string {
 		}
 		return "up/down move  space select  x remove  m merge  s/left back  ctrl+c quit"
 	case modeDirectories:
-		return "up/down move  enter/right latest files  tab commits  r refresh  ctrl+c quit"
+		return "up/down move  enter/right toggle/open  tab commits  r refresh  ctrl+c quit"
 	case modeFiles:
 		if m.selectedFileIsImage() {
 			return "up/down move  enter image  right diff  left/backspace back  r refresh  ctrl+c quit"
@@ -674,7 +677,7 @@ func (m model) shortcuts() []shortcut {
 	case modeDirectories:
 		return []shortcut{
 			{"up/down", "move"},
-			{"enter/right", "files"},
+			{"enter/right", "toggle/open"},
 			{"tab", "commits"},
 			{"r", "refresh"},
 			{"ctrl+c", "quit"},
@@ -821,7 +824,7 @@ func (m model) helpEntries() []helpEntry {
 	case modeDirectories:
 		return append([]helpEntry{
 			{"up/down", "Move cursor", "select a directory or file path"},
-			{"enter/right", "Open latest files", "show matching files from the latest commit touching this path"},
+			{"enter/right", "Toggle/open", "toggle folders or open the selected file path"},
 			{"tab", "Commits", "switch back to commit list"},
 			{"r", "Refresh", "reload commits and request links"},
 			{"ctrl+c", "Quit", "exit agentgit"},
@@ -882,7 +885,7 @@ func (m *model) move(delta int) {
 		m.commitIdx = clamp(m.commitIdx+delta, 0, len(m.commits)-1)
 		m.pending = selectActionNone
 	case modeDirectories:
-		m.dirIdx = clamp(m.dirIdx+delta, 0, len(m.dirEntries)-1)
+		m.dirIdx = clamp(m.dirIdx+delta, 0, len(m.visibleDirectoryEntries())-1)
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
 	case modeDiff, modeFullFile, modeRequest:
@@ -999,6 +1002,8 @@ func (m *model) toggleTopLevelView() {
 	if m.err != nil {
 		return
 	}
+	m.expanded = map[string]bool{}
+	m.expandCurrentDirectoryPath()
 	m.mode = modeDirectories
 	m.scroll = 0
 }
@@ -1036,6 +1041,7 @@ func (m *model) refresh() {
 	m.fullCache = map[string][]string{}
 	m.selected = keepExistingSelections(m.selected, commits)
 	m.pending = selectActionNone
+	m.expanded = map[string]bool{}
 	m.dirEntries = nil
 	m.diffLines = nil
 	m.fullLines = nil
@@ -1052,8 +1058,9 @@ func (m *model) refresh() {
 	m.loadCommitFiles()
 	if m.mode == modeDirectories {
 		m.loadDirectoryEntries()
+		m.expandCurrentDirectoryPath()
 		m.dirIdx = 0
-		for i, entry := range m.dirEntries {
+		for i, entry := range m.visibleDirectoryEntries() {
 			if entry.Path == selectedDirectory {
 				m.dirIdx = i
 				break
@@ -1120,10 +1127,6 @@ func (m *model) toggleSelectedCommit() {
 	}
 	m.pending = selectActionNone
 	commit := m.commits[m.commitIdx]
-	if commit.Hash == git.UncommittedHash {
-		m.notice = "uncommitted changes cannot be selected"
-		return
-	}
 	if m.selected == nil {
 		m.selected = map[string]bool{}
 	}
@@ -1145,7 +1148,11 @@ func (m *model) requestSelectAction(action selectAction) {
 		return
 	}
 	m.pending = action
-	m.notice = "this will rewrite the latest commits"
+	if m.selected[git.UncommittedHash] {
+		m.notice = "this will discard uncommitted changes"
+	} else {
+		m.notice = "this will rewrite the latest commits"
+	}
 }
 
 func (m *model) confirmSelectAction() {
@@ -1159,19 +1166,29 @@ func (m *model) confirmSelectAction() {
 		m.pending = selectActionNone
 		return
 	}
-	base, err := git.Parent(m.root, selected[len(selected)-1].Hash)
-	if err != nil {
-		m.notice = err.Error()
-		m.pending = selectActionNone
-		return
-	}
 	hashes := commitHashes(selected)
 	switch action {
 	case selectActionRemove:
-		if err := git.ResetHard(m.root, base); err != nil {
-			m.notice = "remove failed: " + err.Error()
-			m.pending = selectActionNone
-			return
+		removeUncommitted := m.selected[git.UncommittedHash]
+		if m.selected[git.UncommittedHash] {
+			if err := git.DiscardUncommitted(m.root); err != nil {
+				m.notice = "remove failed: " + err.Error()
+				m.pending = selectActionNone
+				return
+			}
+		}
+		if len(selected) > 0 {
+			base, err := git.Parent(m.root, selected[len(selected)-1].Hash)
+			if err != nil {
+				m.notice = err.Error()
+				m.pending = selectActionNone
+				return
+			}
+			if err := git.ResetHard(m.root, base); err != nil {
+				m.notice = "remove failed: " + err.Error()
+				m.pending = selectActionNone
+				return
+			}
 		}
 		if err := store.DeleteCommitLinks(m.root, hashes); err != nil {
 			m.notice = "removed commits, but db cleanup failed: " + err.Error()
@@ -1180,8 +1197,14 @@ func (m *model) confirmSelectAction() {
 		}
 		m.selected = map[string]bool{}
 		m.pending = selectActionNone
-		m.refreshWithNotice(fmt.Sprintf("removed %d commits", len(selected)))
+		m.refreshWithNotice(removeNotice(len(selected), removeUncommitted))
 	case selectActionSquash:
+		base, err := git.Parent(m.root, selected[len(selected)-1].Hash)
+		if err != nil {
+			m.notice = err.Error()
+			m.pending = selectActionNone
+			return
+		}
 		newHash, err := git.SquashSince(m.root, base, squashCommitMessage(selected))
 		if err != nil {
 			m.notice = "merge failed: " + err.Error()
@@ -1200,27 +1223,55 @@ func (m *model) confirmSelectAction() {
 }
 
 func (m *model) validateSelectAction(action selectAction) ([]git.Commit, error) {
-	selected, err := m.selectedLatestRange()
-	if err != nil {
-		return nil, err
+	switch action {
+	case selectActionRemove:
+		selected, err := m.selectedLatestRange(true)
+		if err != nil {
+			return nil, err
+		}
+		if !m.selected[git.UncommittedHash] {
+			clean, err := git.IsWorkingTreeClean(m.root)
+			if err != nil {
+				return nil, err
+			}
+			if !clean {
+				return nil, errors.New("select uncommitted changes or clean the working tree")
+			}
+		}
+		if len(selected) > 0 {
+			if _, err := git.Parent(m.root, selected[len(selected)-1].Hash); err != nil {
+				return nil, err
+			}
+		}
+		return selected, nil
+	case selectActionSquash:
+		if m.selected[git.UncommittedHash] {
+			return nil, errors.New("uncommitted changes cannot be merged")
+		}
+		selected, err := m.selectedLatestRange(false)
+		if err != nil {
+			return nil, err
+		}
+		if len(selected) < 2 {
+			return nil, errors.New("select at least 2 latest commits to merge")
+		}
+		clean, err := git.IsWorkingTreeClean(m.root)
+		if err != nil {
+			return nil, err
+		}
+		if !clean {
+			return nil, errors.New("working tree must be clean")
+		}
+		if _, err := git.Parent(m.root, selected[len(selected)-1].Hash); err != nil {
+			return nil, err
+		}
+		return selected, nil
+	default:
+		return nil, errors.New("unknown select action")
 	}
-	if action == selectActionSquash && len(selected) < 2 {
-		return nil, errors.New("select at least 2 latest commits to merge")
-	}
-	clean, err := git.IsWorkingTreeClean(m.root)
-	if err != nil {
-		return nil, err
-	}
-	if !clean {
-		return nil, errors.New("working tree must be clean")
-	}
-	if _, err := git.Parent(m.root, selected[len(selected)-1].Hash); err != nil {
-		return nil, err
-	}
-	return selected, nil
 }
 
-func (m model) selectedLatestRange() ([]git.Commit, error) {
+func (m model) selectedLatestRange(allowUncommitted bool) ([]git.Commit, error) {
 	if m.selectedCount() == 0 {
 		return nil, errors.New("select one or more commits")
 	}
@@ -1232,6 +1283,9 @@ func (m model) selectedLatestRange() ([]git.Commit, error) {
 		}
 	}
 	if firstReal < 0 {
+		if allowUncommitted && m.selected[git.UncommittedHash] {
+			return nil, nil
+		}
 		return nil, errors.New("no committed commits to select")
 	}
 	maxSelected := -1
@@ -1240,6 +1294,9 @@ func (m model) selectedLatestRange() ([]git.Commit, error) {
 			continue
 		}
 		if commit.Hash == git.UncommittedHash {
+			if allowUncommitted {
+				continue
+			}
 			return nil, errors.New("uncommitted changes cannot be selected")
 		}
 		if i < firstReal {
@@ -1250,6 +1307,9 @@ func (m model) selectedLatestRange() ([]git.Commit, error) {
 		}
 	}
 	if maxSelected < firstReal {
+		if allowUncommitted && m.selected[git.UncommittedHash] {
+			return nil, nil
+		}
 		return nil, errors.New("selection must start at HEAD")
 	}
 	for i := firstReal; i <= maxSelected; i++ {
@@ -1331,9 +1391,7 @@ func keepExistingSelections(selected map[string]bool, commits []git.Commit) map[
 	}
 	exists := map[string]bool{}
 	for _, commit := range commits {
-		if commit.Hash != git.UncommittedHash {
-			exists[commit.Hash] = true
-		}
+		exists[commit.Hash] = true
 	}
 	kept := map[string]bool{}
 	for hash := range selected {
@@ -1342,6 +1400,19 @@ func keepExistingSelections(selected map[string]bool, commits []git.Commit) map[
 		}
 	}
 	return kept
+}
+
+func removeNotice(commitCount int, removedUncommitted bool) string {
+	switch {
+	case commitCount > 0 && removedUncommitted:
+		return fmt.Sprintf("removed %d commits and discarded uncommitted changes", commitCount)
+	case commitCount > 0:
+		return fmt.Sprintf("removed %d commits", commitCount)
+	case removedUncommitted:
+		return "discarded uncommitted changes"
+	default:
+		return "nothing removed"
+	}
 }
 
 func (m model) viewRequestFull() string {
@@ -1442,9 +1513,6 @@ func (m model) viewSelectList(width int) string {
 		if m.selected[commit.Hash] {
 			box = "[x]"
 		}
-		if commit.Hash == git.UncommittedHash {
-			box = "[-]"
-		}
 		line := fmt.Sprintf("%s %s %s  %s", markerStyle.Render(box), hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
 		line = truncateVisible(line, width)
 		if i == m.commitIdx {
@@ -1466,10 +1534,15 @@ func (m model) viewSelectDetailsPreview() string {
 	count := m.selectedCount()
 	b.WriteString(titleStyle.Render("Select Mode"))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%d commits selected", count))
+	b.WriteString(fmt.Sprintf("%d items selected", count))
 	if count > 0 {
-		if commits, err := m.selectedLatestRange(); err == nil {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("  latest %d commits", len(commits))))
+		if commits, err := m.selectedLatestRange(true); err == nil {
+			if len(commits) > 0 {
+				b.WriteString(mutedStyle.Render(fmt.Sprintf("  latest %d commits", len(commits))))
+			}
+			if m.selected[git.UncommittedHash] {
+				b.WriteString(mutedStyle.Render("  uncommitted"))
+			}
 		} else {
 			b.WriteString("  " + mutedStyle.Render(err.Error()))
 		}
@@ -1481,7 +1554,7 @@ func (m model) viewSelectDetailsPreview() string {
 		b.WriteString(mutedStyle.Render("press y to continue or n/esc to cancel"))
 		b.WriteString("\n")
 	} else {
-		b.WriteString(mutedStyle.Render("space selects commits. remove/merge require a contiguous range starting at HEAD."))
+		b.WriteString(mutedStyle.Render("space selects items. remove can discard uncommitted changes; merge requires latest commits."))
 		b.WriteString("\n")
 	}
 	if m.notice != "" {
@@ -1500,15 +1573,20 @@ func (m model) viewSelectDetailsPreview() string {
 }
 
 func (m model) viewDirectoryList(width int) string {
-	if len(m.dirEntries) == 0 {
+	entries := m.visibleDirectoryEntries()
+	if len(entries) == 0 {
 		return mutedStyle.Render("no changed directories")
 	}
 	var b strings.Builder
-	for i, entry := range m.dirEntries {
+	for i, entry := range entries {
 		kind := "[f]"
 		name := entry.DisplayName
 		if entry.IsDir {
-			kind = "[d]"
+			if m.expanded[entry.Path] {
+				kind = "[-]"
+			} else {
+				kind = "[+]"
+			}
 			name += "/"
 		}
 		indent := strings.Repeat("  ", entry.Depth)
@@ -1528,10 +1606,11 @@ func (m model) viewDirectoryList(width int) string {
 }
 
 func (m model) viewDirectoryDetailsPreview() string {
-	if len(m.dirEntries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(m.dirEntries) {
+	entries := m.visibleDirectoryEntries()
+	if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
 		return ""
 	}
-	entry := m.dirEntries[m.dirIdx]
+	entry := entries[m.dirIdx]
 	var b strings.Builder
 	title := "File Details"
 	path := entry.Path
@@ -1562,7 +1641,7 @@ func (m model) viewDirectoryDetailsPreview() string {
 		Padding(0, 1).
 		Width(m.width)
 
-	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press enter for latest files"))
+	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... enter toggles folders or opens files"))
 }
 
 func requestSummaryLine(requests []store.LinkedRequest) string {
@@ -1839,7 +1918,7 @@ func (m *model) loadDirectoryEntries() {
 		return directoryEntrySortKey(entries[i]) < directoryEntrySortKey(entries[j])
 	})
 	m.dirEntries = entries
-	m.dirIdx = clamp(m.dirIdx, 0, len(m.dirEntries)-1)
+	m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
 }
 
 func addDirectoryStats(stats map[string]*directoryStats, file string, commitIndex int) {
@@ -1890,11 +1969,97 @@ func directoryEntrySortKey(entry directoryEntry) string {
 	return entry.Path
 }
 
-func (m *model) enterDirectoryEntry() {
-	if len(m.dirEntries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(m.dirEntries) {
+func (m model) visibleDirectoryEntries() []directoryEntry {
+	if len(m.dirEntries) == 0 {
+		return nil
+	}
+	var entries []directoryEntry
+	for _, entry := range m.dirEntries {
+		if m.directoryEntryVisible(entry) {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+func (m model) directoryEntryVisible(entry directoryEntry) bool {
+	parent := pathDirectory(entry.Path)
+	for parent != "" {
+		if !m.expanded[parent] {
+			return false
+		}
+		parent = pathDirectory(parent)
+	}
+	return true
+}
+
+func (m *model) expandCurrentDirectoryPath() {
+	if m.expanded == nil {
+		m.expanded = map[string]bool{}
+	}
+	for _, dir := range m.currentDirectoryPathAncestors() {
+		m.expanded[dir] = true
+	}
+	target := m.currentDirectoryTargetPath()
+	if target == "" {
+		m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
 		return
 	}
-	entry := m.dirEntries[m.dirIdx]
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == target {
+			m.dirIdx = i
+			return
+		}
+	}
+	m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
+}
+
+func (m model) currentDirectoryPathAncestors() []string {
+	target := m.currentDirectoryTargetPath()
+	if target == "" {
+		return nil
+	}
+	var dirs []string
+	for dir := pathDirectory(target); dir != ""; dir = pathDirectory(dir) {
+		dirs = append(dirs, dir)
+	}
+	for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
+		dirs[i], dirs[j] = dirs[j], dirs[i]
+	}
+	return dirs
+}
+
+func (m model) currentDirectoryTargetPath() string {
+	if len(m.files) > 0 && m.fileIdx >= 0 && m.fileIdx < len(m.files) {
+		return m.files[m.fileIdx]
+	}
+	if len(m.commits) > 0 && m.commitIdx >= 0 && m.commitIdx < len(m.commits) {
+		files := m.fileCache[m.commits[m.commitIdx].Hash]
+		if len(files) > 0 {
+			return files[0]
+		}
+	}
+	return ""
+}
+
+func (m *model) enterDirectoryEntry() {
+	entries := m.visibleDirectoryEntries()
+	if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
+		return
+	}
+	entry := entries[m.dirIdx]
+	if entry.IsDir {
+		if m.expanded == nil {
+			m.expanded = map[string]bool{}
+		}
+		if m.expanded[entry.Path] {
+			delete(m.expanded, entry.Path)
+		} else {
+			m.expanded[entry.Path] = true
+		}
+		m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
+		return
+	}
 	if len(entry.CommitIndexes) == 0 {
 		return
 	}

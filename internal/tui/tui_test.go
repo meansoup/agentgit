@@ -308,6 +308,88 @@ func TestLoadDirectoryEntriesGroupsChangedFiles(t *testing.T) {
 	}
 }
 
+func TestDirectoryViewExpandsOnlyCurrentFilePath(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
+		},
+		fileCache: map[string][]string{
+			"c1": {
+				"internal/tui/tui.go",
+				"internal/hooks/hooks.go",
+				"README.md",
+				"docs/PRD.md",
+			},
+		},
+		files:   []string{"internal/tui/tui.go"},
+		fileIdx: 0,
+	}
+
+	m.loadDirectoryEntries()
+	m.expandCurrentDirectoryPath()
+
+	var paths []string
+	for _, entry := range m.visibleDirectoryEntries() {
+		paths = append(paths, entry.Path)
+	}
+	got := strings.Join(paths, "\n")
+	for _, want := range []string{"README.md", "docs", "internal", "internal/tui", "internal/tui/tui.go"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("visible directories missing %q:\n%s", want, got)
+		}
+	}
+	for _, hidden := range []string{"docs/PRD.md", "internal/hooks/hooks.go"} {
+		if strings.Contains(got, hidden) {
+			t.Fatalf("visible directories included folded path %q:\n%s", hidden, got)
+		}
+	}
+}
+
+func TestEnterDirectoryEntryTogglesFolderExpansion(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
+		},
+		fileCache: map[string][]string{
+			"c1": {"docs/PRD.md", "README.md"},
+		},
+		mode: modeDirectories,
+	}
+	m.loadDirectoryEntries()
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == "docs" {
+			m.dirIdx = i
+			break
+		}
+	}
+
+	m.enter(false)
+
+	if !m.expanded["docs"] {
+		t.Fatal("docs was not expanded")
+	}
+	var expanded []string
+	for _, entry := range m.visibleDirectoryEntries() {
+		expanded = append(expanded, entry.Path)
+	}
+	if !strings.Contains(strings.Join(expanded, "\n"), "docs/PRD.md") {
+		t.Fatalf("expanded entries missing docs/PRD.md: %v", expanded)
+	}
+
+	m.enter(false)
+
+	if m.expanded["docs"] {
+		t.Fatal("docs remained expanded after second enter")
+	}
+	var collapsed []string
+	for _, entry := range m.visibleDirectoryEntries() {
+		collapsed = append(collapsed, entry.Path)
+	}
+	if strings.Contains(strings.Join(collapsed, "\n"), "docs/PRD.md") {
+		t.Fatalf("collapsed entries still include docs/PRD.md: %v", collapsed)
+	}
+}
+
 func TestTabTogglesBetweenCommitAndDirectoryViews(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "c1", ShortHash: "c1", Subject: "change"}},
@@ -343,8 +425,9 @@ func TestEnterDirectoryEntryOpensLatestMatchingCommitFiles(t *testing.T) {
 		mode: modeDirectories,
 	}
 	m.loadDirectoryEntries()
-	for i, entry := range m.dirEntries {
-		if entry.Path == "internal" {
+	m.expanded = map[string]bool{"internal": true, "internal/tui": true}
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == "internal/tui/tui.go" {
 			m.dirIdx = i
 			break
 		}
@@ -377,7 +460,7 @@ func TestSelectedLatestRangeAllowsContiguousHeadRangeWithUncommittedEntry(t *tes
 		},
 	}
 
-	got, err := m.selectedLatestRange()
+	got, err := m.selectedLatestRange(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +480,7 @@ func TestSelectedLatestRangeRejectsSelectionThatSkipsHead(t *testing.T) {
 		},
 	}
 
-	if _, err := m.selectedLatestRange(); err == nil {
+	if _, err := m.selectedLatestRange(false); err == nil {
 		t.Fatal("selectedLatestRange succeeded without selecting HEAD")
 	}
 }
@@ -415,12 +498,12 @@ func TestSelectedLatestRangeRejectsGaps(t *testing.T) {
 		},
 	}
 
-	if _, err := m.selectedLatestRange(); err == nil {
+	if _, err := m.selectedLatestRange(false); err == nil {
 		t.Fatal("selectedLatestRange succeeded with a gap")
 	}
 }
 
-func TestToggleSelectedCommitIgnoresUncommittedChanges(t *testing.T) {
+func TestToggleSelectedCommitAllowsUncommittedChanges(t *testing.T) {
 	m := model{
 		commits: []git.Commit{
 			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
@@ -433,10 +516,30 @@ func TestToggleSelectedCommitIgnoresUncommittedChanges(t *testing.T) {
 
 	m.toggleSelectedCommit()
 
-	if m.selected[git.UncommittedHash] {
-		t.Fatal("uncommitted entry was selected")
+	if !m.selected[git.UncommittedHash] {
+		t.Fatal("uncommitted entry was not selected")
 	}
-	if !strings.Contains(m.notice, "uncommitted") {
-		t.Fatalf("notice = %q, want uncommitted warning", m.notice)
+}
+
+func TestSelectedLatestRangeAllowsOnlyUncommittedForRemove(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+		},
+		selected: map[string]bool{
+			git.UncommittedHash: true,
+		},
+	}
+
+	got, err := m.selectedLatestRange(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("selectedLatestRange = %+v, want no commits for uncommitted-only selection", got)
+	}
+	if _, err := m.selectedLatestRange(false); err == nil {
+		t.Fatal("selectedLatestRange allowed uncommitted selection for merge")
 	}
 }

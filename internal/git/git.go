@@ -229,6 +229,14 @@ func ResetHard(root string, ref string) error {
 	return err
 }
 
+func DiscardUncommitted(root string) error {
+	if _, err := Run(root, "reset", "--hard", "HEAD"); err != nil {
+		return err
+	}
+	_, err := Run(root, "clean", "-fd")
+	return err
+}
+
 func SquashSince(root string, baseRef string, message []string) (string, error) {
 	if strings.TrimSpace(baseRef) == "" {
 		return "", errors.New("squash base is empty")

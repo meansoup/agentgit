@@ -122,6 +122,37 @@ func TestResetHardDropsLatestCommitChanges(t *testing.T) {
 	}
 }
 
+func TestDiscardUncommittedDropsTrackedAndUntrackedChanges(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	writeFile(t, root, "tracked.txt", "changed\n")
+	writeFile(t, root, "new.txt", "new\n")
+
+	if err := DiscardUncommitted(root); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "base\n" {
+		t.Fatalf("tracked.txt = %q, want base content", raw)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("new.txt still exists or stat failed unexpectedly: %v", err)
+	}
+	clean, err := IsWorkingTreeClean(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !clean {
+		t.Fatal("working tree is not clean after DiscardUncommitted")
+	}
+}
+
 func TestSquashSinceCombinesLatestCommits(t *testing.T) {
 	root := newTestRepo(t)
 	writeFile(t, root, "tracked.txt", "base\n")
