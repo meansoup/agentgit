@@ -489,6 +489,75 @@ func TestEnterDirectoryEntryOpensLatestMatchingCommitFiles(t *testing.T) {
 	}
 }
 
+func TestBackFromDirectoryFileRestoresDirectoryDepth(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
+		},
+		fileCache: map[string][]string{
+			"c1": {"internal/tui/tui.go", "internal/hooks/hooks.go"},
+		},
+		expanded: map[string]bool{
+			"internal":     true,
+			"internal/tui": true,
+		},
+		mode: modeDirectories,
+	}
+	m.loadDirectoryEntries()
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == "internal/tui/tui.go" {
+			m.dirIdx = i
+			break
+		}
+	}
+	wantDirIdx := m.dirIdx
+
+	m.enter(false)
+
+	if m.mode != modeFiles {
+		t.Fatalf("mode after opening directory file = %v, want modeFiles", m.mode)
+	}
+	if m.fileReturn != modeDirectories {
+		t.Fatalf("fileReturn = %v, want modeDirectories", m.fileReturn)
+	}
+
+	m.mode = modeDiff
+	m.back()
+	if m.mode != modeFiles {
+		t.Fatalf("mode after leaving diff = %v, want modeFiles", m.mode)
+	}
+	m.back()
+
+	if m.mode != modeDirectories {
+		t.Fatalf("mode after leaving files = %v, want modeDirectories", m.mode)
+	}
+	if m.dirIdx != wantDirIdx {
+		t.Fatalf("dirIdx = %d, want %d", m.dirIdx, wantDirIdx)
+	}
+	if !m.expanded["internal"] || !m.expanded["internal/tui"] {
+		t.Fatalf("expanded directory depth was lost: %+v", m.expanded)
+	}
+}
+
+func TestBackFromCommitFileReturnsToCommits(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
+		},
+		fileCache: map[string][]string{
+			"c1": {"README.md"},
+		},
+		mode: modeCommits,
+	}
+
+	m.enter(false)
+	m.back()
+
+	if m.mode != modeCommits {
+		t.Fatalf("mode after leaving commit files = %v, want modeCommits", m.mode)
+	}
+}
+
 func TestSelectedLatestRangeAllowsContiguousHeadRangeWithUncommittedEntry(t *testing.T) {
 	m := model{
 		commits: []git.Commit{

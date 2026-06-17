@@ -59,6 +59,7 @@ type model struct {
 	fullCache  map[string][]string
 	selected   map[string]bool
 	mode       mode
+	fileReturn mode
 	diffMode   diffMode
 	pending    selectAction
 	commitIdx  int
@@ -960,6 +961,7 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		}
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
+		m.fileReturn = modeCommits
 		m.mode = modeFiles
 	case modeSelect:
 		m.toggleSelectedCommit()
@@ -987,7 +989,11 @@ func (m *model) back() {
 	case modeDiff, modeFullFile, modeRequest:
 		m.mode = modeFiles
 	case modeFiles:
-		m.mode = modeCommits
+		if m.fileReturn == modeDirectories {
+			m.mode = modeDirectories
+		} else {
+			m.mode = modeCommits
+		}
 	case modeSelect:
 		m.mode = modeCommits
 		m.pending = selectActionNone
@@ -1007,7 +1013,9 @@ func (m *model) toggleTopLevelView() {
 	if m.err != nil {
 		return
 	}
-	m.expanded = map[string]bool{}
+	if m.mode != modeDirectories && !(m.mode == modeFiles && m.fileReturn == modeDirectories) {
+		m.expanded = map[string]bool{}
+	}
 	m.expandCurrentDirectoryPath()
 	m.mode = modeDirectories
 	m.scroll = 0
@@ -1019,8 +1027,9 @@ func (m *model) refresh() {
 		selectedCommit = m.commits[m.commitIdx].Hash
 	}
 	selectedDirectory := ""
-	if len(m.dirEntries) > 0 && m.dirIdx >= 0 && m.dirIdx < len(m.dirEntries) {
-		selectedDirectory = m.dirEntries[m.dirIdx].Path
+	visibleDirectories := m.visibleDirectoryEntries()
+	if len(visibleDirectories) > 0 && m.dirIdx >= 0 && m.dirIdx < len(visibleDirectories) {
+		selectedDirectory = visibleDirectories[m.dirIdx].Path
 	}
 	selectedFile := ""
 	if len(m.files) > 0 && m.fileIdx >= 0 && m.fileIdx < len(m.files) {
@@ -1046,7 +1055,9 @@ func (m *model) refresh() {
 	m.fullCache = map[string][]string{}
 	m.selected = keepExistingSelections(m.selected, commits)
 	m.pending = selectActionNone
-	m.expanded = map[string]bool{}
+	if m.mode != modeDirectories && !(m.mode == modeFiles && m.fileReturn == modeDirectories) {
+		m.expanded = map[string]bool{}
+	}
 	m.dirEntries = nil
 	m.diffLines = nil
 	m.fullLines = nil
@@ -1061,9 +1072,8 @@ func (m *model) refresh() {
 		}
 	}
 	m.loadCommitFiles()
-	if m.mode == modeDirectories {
+	if m.mode == modeDirectories || (m.mode == modeFiles && m.fileReturn == modeDirectories) {
 		m.loadDirectoryEntries()
-		m.expandCurrentDirectoryPath()
 		m.dirIdx = 0
 		for i, entry := range m.visibleDirectoryEntries() {
 			if entry.Path == selectedDirectory {
@@ -2104,6 +2114,7 @@ func (m *model) enterDirectoryEntry() {
 	m.files = files
 	m.fileIdx = 0
 	m.scroll = 0
+	m.fileReturn = modeDirectories
 	m.mode = modeFiles
 }
 
