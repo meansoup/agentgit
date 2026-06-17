@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,106 @@ import (
 	"github.com/minkuik/agentgit/internal/git"
 	"github.com/minkuik/agentgit/internal/store"
 )
+
+func TestInstallClaudeSettingsHooksPreservesSettingsAndIsIdempotent(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	existing := `{
+  "permissions": {"allow": ["Bash(git status)"]},
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "/usr/local/bin/existing-hook"}]
+      }
+    ]
+  }
+}
+`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := "/tmp/agentgit-claude-hook"
+	if err := installClaudeSettingsHooks(settingsPath, runner); err != nil {
+		t.Fatal(err)
+	}
+	if err := installClaudeSettingsHooks(settingsPath, runner); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]interface{}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := settings["permissions"]; !ok {
+		t.Fatal("existing permissions were removed")
+	}
+	hooks := settings["hooks"].(map[string]interface{})
+	for _, eventName := range []string{"UserPromptSubmit", "Stop"} {
+		if got := countHookCommands(hooks[eventName], runner); got != 1 {
+			t.Fatalf("%s agentgit hook count = %d, want 1", eventName, got)
+		}
+	}
+	if got := countHookCommands(hooks["Stop"], "/usr/local/bin/existing-hook"); got != 1 {
+		t.Fatalf("existing Stop hook count = %d, want 1", got)
+	}
+}
+
+func TestHandleClaudeAutoCommitsAndLinksRequest(t *testing.T) {
+	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
+	root := newHookTestRepo(t)
+	writeHookTestFile(t, root, "base.txt", "base\n")
+	runHookTestGit(t, root, "add", "base.txt")
+	runHookTestGit(t, root, "commit", "-m", "base")
+
+	submit := claudeHookInput{
+		SessionID:     "claude-session",
+		CWD:           root,
+		HookEventName: "UserPromptSubmit",
+		Prompt:        "Add Claude support",
+	}
+	if err := HandleClaude(jsonInput(t, submit)); err != nil {
+		t.Fatal(err)
+	}
+	writeHookTestFile(t, root, "claude.txt", "supported\n")
+	stop := claudeHookInput{
+		SessionID:     "claude-session",
+		CWD:           root,
+		HookEventName: "Stop",
+	}
+	if err := HandleClaude(jsonInput(t, stop)); err != nil {
+		t.Fatal(err)
+	}
+
+	if status, err := git.StatusPaths(root); err != nil {
+		t.Fatal(err)
+	} else if len(status) != 0 {
+		t.Fatalf("status after Claude auto commit = %+v, want clean", status)
+	}
+	if subject := strings.TrimSpace(git.RunAllowError(root, "log", "-1", "--pretty=%s")); subject != "agentgit: Add Claude support" {
+		t.Fatalf("latest commit subject = %q", subject)
+	}
+	hash, err := git.Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	links, err := store.RequestsByCommit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := links[hash]
+	if len(got) != 1 || got[0].AgentName != "claude" || got[0].Model != "claude" {
+		t.Fatalf("Claude request links = %+v", got)
+	}
+	if _, ok, err := store.FindActiveRequestBySession(root, "claude-session"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("Claude request remained active after Stop")
+	}
+}
 
 func TestHandlePostCommitLinksCommitBySessionEnv(t *testing.T) {
 	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
@@ -197,4 +299,29 @@ func runHookTestGit(t *testing.T, root string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+}
+
+func jsonInput(t *testing.T, value interface{}) *bytes.Reader {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.NewReader(raw)
+}
+
+func countHookCommands(rawGroups interface{}, command string) int {
+	groups, _ := rawGroups.([]interface{})
+	count := 0
+	for _, rawGroup := range groups {
+		group, _ := rawGroup.(map[string]interface{})
+		handlers, _ := group["hooks"].([]interface{})
+		for _, rawHandler := range handlers {
+			handler, _ := rawHandler.(map[string]interface{})
+			if handler["command"] == command {
+				count++
+			}
+		}
+	}
+	return count
 }

@@ -47,16 +47,16 @@ func run(args []string) error {
 func usage() {
 	fmt.Println(`usage:
   agentgit [--limit 500] [path]
-  agentgit setup codex|gemini
-  agentgit hook codex|gemini|post-commit
+  agentgit setup codex|gemini|claude
+  agentgit hook codex|gemini|claude|post-commit
   agentgit version
 
 commands:
-  agentgit                      browse request-linked commits for the current path
-  agentgit <path>               browse request-linked commits for a path
-  setup codex|gemini            install lifecycle hooks once for this PC
-  hook codex|gemini|post-commit internal hook entrypoint
-  version                       print version`)
+  agentgit                             browse request-linked commits for the current path
+  agentgit <path>                      browse request-linked commits for a path
+  setup codex|gemini|claude            install lifecycle hooks once for this PC
+  hook codex|gemini|claude|post-commit internal hook entrypoint
+  version                              print version`)
 }
 
 func cmdBrowse(args []string) error {
@@ -87,7 +87,7 @@ func cmdBrowse(args []string) error {
 
 func cmdSetup(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: agentgit setup codex|gemini")
+		return errors.New("usage: agentgit setup codex|gemini|claude")
 	}
 	switch args[0] {
 	case "codex":
@@ -104,16 +104,21 @@ func cmdSetup(args []string) error {
 		}
 		fmt.Println("installed gemini hooks:", hooksPath)
 	case "claude":
-		return fmt.Errorf("setup for %s is not implemented yet", args[0])
+		hooksPath, err := hooks.InstallClaude()
+		if err != nil {
+			return err
+		}
+		fmt.Println("installed claude hooks:", hooksPath)
+		fmt.Println("review the installed hooks in Claude Code with /hooks")
 	default:
-		return errors.New("usage: agentgit setup codex|gemini")
+		return errors.New("usage: agentgit setup codex|gemini|claude")
 	}
 	return nil
 }
 
 func cmdHook(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: agentgit hook codex|gemini|post-commit")
+		return errors.New("usage: agentgit hook codex|gemini|claude|post-commit")
 	}
 	switch args[0] {
 	case "codex":
@@ -126,6 +131,11 @@ func cmdHook(args []string) error {
 			fmt.Fprintln(os.Stderr, "agentgit hook gemini:", err)
 		}
 		return nil
+	case "claude":
+		if err := hooks.HandleClaude(os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, "agentgit hook claude:", err)
+		}
+		return nil
 	case "post-commit":
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -136,6 +146,6 @@ func cmdHook(args []string) error {
 		}
 		return nil
 	default:
-		return errors.New("usage: agentgit hook codex|gemini|post-commit")
+		return errors.New("usage: agentgit hook codex|gemini|claude|post-commit")
 	}
 }

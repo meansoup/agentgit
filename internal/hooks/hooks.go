@@ -15,6 +15,7 @@ import (
 
 const AgentgitHookCommand = "agentgit hook codex"
 const AgentgitGeminiHookCommand = "agentgit hook gemini"
+const AgentgitClaudeHookCommand = "agentgit hook claude"
 const (
 	agentgitCodexHookStart  = "# BEGIN agentgit codex hooks"
 	agentgitCodexHookEnd    = "# END agentgit codex hooks"
@@ -75,6 +76,28 @@ func InstallGemini() (string, error) {
 	return settingsPath, nil
 }
 
+func InstallClaude() (string, error) {
+	if _, err := store.Init(); err != nil {
+		return "", err
+	}
+	runner, err := installClaudeHookRunner()
+	if err != nil {
+		return "", err
+	}
+	claudeDir, err := claudeHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return "", err
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	if err := installClaudeSettingsHooks(settingsPath, runner); err != nil {
+		return "", err
+	}
+	return settingsPath, nil
+}
+
 func codexHomeDir() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("CODEX_HOME")); override != "" {
 		return filepath.Abs(expandHome(override))
@@ -92,6 +115,17 @@ func geminiHomeDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".gemini"), nil
+}
+
+func claudeHomeDir() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); override != "" {
+		return filepath.Abs(expandHome(override))
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
 }
 
 func cleanupLegacyGitHook() error {
@@ -244,6 +278,28 @@ func installGeminiHookRunner() (string, error) {
 PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export PATH
 exec %s hook gemini
+`, shellQuote(bin))
+	if err := os.WriteFile(runner, []byte(body), 0o755); err != nil {
+		return "", err
+	}
+	return runner, nil
+}
+
+func installClaudeHookRunner() (string, error) {
+	bin, err := resolveAgentgitExecutable()
+	if err != nil {
+		return "", err
+	}
+	dataDir := filepath.Dir(store.DefaultDBPath())
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return "", err
+	}
+	runner := filepath.Join(dataDir, "agentgit-claude-hook")
+	body := fmt.Sprintf(`#!/bin/sh
+# Installed by agentgit. Used by Claude Code lifecycle hooks.
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH
+exec %s hook claude
 `, shellQuote(bin))
 	if err := os.WriteFile(runner, []byte(body), 0o755); err != nil {
 		return "", err
@@ -447,6 +503,71 @@ func installGeminiSettingsHooks(settingsPath, runner string) error {
 	return os.WriteFile(settingsPath, append(updated, '\n'), 0o600)
 }
 
+func installClaudeSettingsHooks(settingsPath, runner string) error {
+	settings := make(map[string]interface{})
+	if raw, err := os.ReadFile(settingsPath); err == nil {
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return fmt.Errorf("parse %s: %w", settingsPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		hooks = make(map[string]interface{})
+		settings["hooks"] = hooks
+	}
+	for _, eventName := range []string{"UserPromptSubmit", "Stop"} {
+		groups, _ := hooks[eventName].([]interface{})
+		filtered := make([]interface{}, 0, len(groups)+1)
+		for _, rawGroup := range groups {
+			group, ok := rawGroup.(map[string]interface{})
+			if !ok {
+				filtered = append(filtered, rawGroup)
+				continue
+			}
+			rawHandlers, _ := group["hooks"].([]interface{})
+			handlers := make([]interface{}, 0, len(rawHandlers))
+			for _, rawHandler := range rawHandlers {
+				handler, ok := rawHandler.(map[string]interface{})
+				if !ok || !isAgentgitClaudeHandler(handler, runner) {
+					handlers = append(handlers, rawHandler)
+				}
+			}
+			if len(handlers) > 0 {
+				group["hooks"] = handlers
+				filtered = append(filtered, group)
+			}
+		}
+		filtered = append(filtered, map[string]interface{}{
+			"matcher": "",
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"type":    "command",
+					"command": runner,
+					"timeout": 120,
+				},
+			},
+		})
+		hooks[eventName] = filtered
+	}
+
+	updated, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, append(updated, '\n'), 0o600)
+}
+
+func isAgentgitClaudeHandler(handler map[string]interface{}, runner string) bool {
+	command, _ := handler["command"].(string)
+	command = strings.TrimSpace(command)
+	return command == runner ||
+		command == AgentgitClaudeHookCommand ||
+		strings.HasSuffix(command, "/agentgit-claude-hook")
+}
+
 func removeAgentgitCodexHookBlock(s string) string {
 	return removeBlock(s, agentgitCodexHookStart, agentgitCodexHookEnd)
 }
@@ -529,6 +650,74 @@ func HandleGemini(r io.Reader) error {
 	// Gemini hooks MUST return a JSON object on stdout
 	fmt.Println("{}")
 	return errOut
+}
+
+func HandleClaude(r io.Reader) error {
+	var input claudeHookInput
+	if err := json.NewDecoder(r).Decode(&input); err != nil {
+		return err
+	}
+	if input.CWD == "" {
+		return nil
+	}
+	root, err := git.RepoRoot(input.CWD)
+	if err != nil {
+		return nil
+	}
+	switch input.HookEventName {
+	case "UserPromptSubmit":
+		return handleClaudeUserPromptSubmit(input, root)
+	case "Stop":
+		return handleClaudeStop(input, root)
+	default:
+		return nil
+	}
+}
+
+func handleClaudeUserPromptSubmit(input claudeHookInput, root string) error {
+	if err := EnsurePostCommitHook(root); err != nil {
+		return err
+	}
+	baseline, err := git.StatusPaths(root)
+	if err != nil {
+		return err
+	}
+	head, _ := git.Head(root)
+	model := strings.TrimSpace(input.Model)
+	if model == "" {
+		model = "claude"
+	}
+	_, err = store.CreateOrUpdateRequest(
+		"claude",
+		"claude",
+		model,
+		input.Prompt,
+		root,
+		input.SessionID,
+		"current",
+		head,
+		baseline,
+	)
+	return err
+}
+
+func handleClaudeStop(input claudeHookInput, root string) error {
+	req, ok, err := store.FindRequest(root, "claude", input.SessionID, "current")
+	if err != nil || !ok {
+		return err
+	}
+	if err := autoCommitRequest(root, req); err != nil {
+		return err
+	}
+	return store.FinishRequest(req.ID)
+}
+
+type claudeHookInput struct {
+	SessionID     string `json:"session_id"`
+	CWD           string `json:"cwd"`
+	HookEventName string `json:"hook_event_name"`
+	Model         string `json:"model"`
+	Prompt        string `json:"prompt"`
 }
 
 func handleGeminiBeforeAgent(input geminiHookInput, root string) error {

@@ -1,6 +1,6 @@
 # agentgit
 
-**agentgit** bridges AI coding agent requests with Git commits. Use your agent CLI (`codex`, `gemini`) as usual; `agentgit` automatically captures requests and links commits in a local TUI browser.
+**agentgit** bridges AI coding agent requests with Git commits. Use your agent CLI (`codex`, `gemini`, `claude`) as usual; `agentgit` automatically captures requests and links commits in a local TUI browser.
 
 [한국어 문서 (README_ko.md)](./README_ko.md)
 
@@ -12,6 +12,8 @@
    agentgit setup codex
    # or
    agentgit setup gemini
+   # or
+   agentgit setup claude
    ```
 3. **Use**: Run your agent normally (e.g., `codex`). Then browse the linked history:
    ```sh
@@ -24,7 +26,7 @@
 | :--- | :--- |
 | `agentgit` | Open the history browser for the current directory. |
 | `agentgit [path]` | Browse history for a specific repo, folder, or file. |
-| `agentgit setup [agent]` | Install hooks for `codex` or `gemini`. |
+| `agentgit setup [agent]` | Install hooks for `codex`, `gemini`, or `claude`. |
 | `agentgit --limit 50` | Limit the number of commits shown. |
 
 ## TUI Navigation

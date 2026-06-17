@@ -1,6 +1,6 @@
 # agentgit
 
-**agentgit**은 AI 코딩 에이전트의 요청(Request)과 Git 커밋을 연결해주는 도구입니다. 기존처럼 에이전트(`codex`, `gemini`)를 사용하면, `agentgit`이 백그라운드에서 요청 내용을 기록하고 생성된 커밋을 TUI 브라우저로 보여줍니다.
+**agentgit**은 AI 코딩 에이전트의 요청(Request)과 Git 커밋을 연결해주는 도구입니다. 기존처럼 에이전트(`codex`, `gemini`, `claude`)를 사용하면, `agentgit`이 백그라운드에서 요청 내용을 기록하고 생성된 커밋을 TUI 브라우저로 보여줍니다.
 
 [English Docs (README.md)](./README.md)
 
@@ -12,6 +12,8 @@
    agentgit setup codex
    # 또는
    agentgit setup gemini
+   # 또는
+   agentgit setup claude
    ```
 3. **사용**: 에이전트(예: `codex`)를 평소처럼 사용한 뒤, 연결된 히스토리를 확인합니다.
    ```sh
@@ -24,7 +26,7 @@
 | :--- | :--- |
 | `agentgit` | 현재 디렉토리의 히스토리 브라우저를 엽니다. |
 | `agentgit [path]` | 특정 저장소, 폴더 또는 파일의 히스토리를 확인합니다. |
-| `agentgit setup [agent]` | `codex` 또는 `gemini`를 위한 훅(hook)을 설치합니다. |
+| `agentgit setup [agent]` | `codex`, `gemini` 또는 `claude`를 위한 훅(hook)을 설치합니다. |
 | `agentgit --limit 50` | 표시할 커밋 개수를 제한합니다. |
 
 ## TUI 조작법
