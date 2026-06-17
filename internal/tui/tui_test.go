@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -243,6 +244,48 @@ func TestMoveInFilesDoesNotLoadDiff(t *testing.T) {
 	}
 	if m.diffLines != nil {
 		t.Fatalf("move in file list loaded diff lines: %q", m.diffLines)
+	}
+}
+
+func TestViewFilesBodyRendersOnlyVisibleWindow(t *testing.T) {
+	var files []string
+	for i := 0; i < 1000; i++ {
+		files = append(files, fmt.Sprintf("file-%04d-%s", i, strings.Repeat("x", 40)))
+	}
+	m := model{
+		commits: []git.Commit{{Hash: "abc", ShortHash: "abc", Subject: "test"}},
+		files:   files,
+		fileIdx: 500,
+		width:   32,
+	}
+
+	body := m.viewFilesBody(7)
+	lines := strings.Split(body, "\n")
+
+	if len(lines) != 7 {
+		t.Fatalf("rendered %d lines, want 7", len(lines))
+	}
+	if strings.Contains(body, "file-0000") || !strings.Contains(body, "file-0500") {
+		t.Fatalf("file body rendered entries outside the visible window")
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, "\x1b[K") {
+			t.Fatalf("line missing clear-to-end sequence: %q", line)
+		}
+		if width := ansi.StringWidth(ansi.Strip(line)); width != 32 {
+			t.Fatalf("line width = %d, want 32: %q", width, line)
+		}
+	}
+}
+
+func TestFrameLineClearsAndPadsLongLines(t *testing.T) {
+	got := frameLine("abcdefghijklmnopqrstuvwxyz", 10)
+
+	if !strings.Contains(got, "\x1b[K") {
+		t.Fatalf("frameLine missing clear-to-end sequence: %q", got)
+	}
+	if width := ansi.StringWidth(ansi.Strip(got)); width != 10 {
+		t.Fatalf("frameLine width = %d, want 10: %q", width, got)
 	}
 }
 

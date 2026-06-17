@@ -316,7 +316,7 @@ func (m model) contentView() (string, int) {
 	case modeDirectories:
 		return m.viewDirectoryList(m.width), m.directoryFocusLine()
 	case modeFiles:
-		return m.viewFilesList(m.width), m.fileFocusLine()
+		return "", m.fileFocusLine()
 	case modeDiff:
 		return m.viewDiff(), 2
 	case modeFullFile:
@@ -350,7 +350,12 @@ func (m model) viewFrame(content string, focusLine int) string {
 	footerHeight := lipgloss.Height(footer)
 
 	bodyHeight := max(0, m.height-headerHeight-footerHeight-topHeight)
-	body := m.viewBody(content, bodyHeight, focusLine)
+	var body string
+	if m.mode == modeFiles {
+		body = m.viewFilesBody(bodyHeight)
+	} else {
+		body = m.viewBody(content, bodyHeight, focusLine)
+	}
 
 	res := header + "\n"
 	if staticTop != "" {
@@ -555,7 +560,7 @@ func (m model) viewBody(content string, height int, focusLine int) string {
 		visible = append(visible, "")
 	}
 	for i, line := range visible {
-		visible[i] = padPlain(line, m.width)
+		visible[i] = frameLine(line, m.width)
 	}
 	return strings.Join(visible, "\n")
 }
@@ -1481,7 +1486,7 @@ func (m model) directoryFocusLine() int {
 }
 
 func (m model) fileFocusLine() int {
-	return 2 + m.fileIdx
+	return m.fileIdx
 }
 
 func (m model) viewCommitsList(width int) string {
@@ -1704,6 +1709,29 @@ func (m model) viewFilesList(width int) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func (m model) viewFilesBody(height int) string {
+	if height <= 0 {
+		return ""
+	}
+	start := 0
+	if len(m.files) > height {
+		start = clamp(m.fileIdx-height/2, 0, len(m.files)-height)
+	}
+	end := min(len(m.files), start+height)
+	lines := make([]string, 0, height)
+	for i := start; i < end; i++ {
+		line := fileStyle.Render(m.files[i])
+		if i == m.fileIdx {
+			line = cursorStyle.Render(line)
+		}
+		lines = append(lines, frameLine(line, m.width))
+	}
+	for len(lines) < height {
+		lines = append(lines, frameLine("", m.width))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) viewSelectedDiffPreview(width int) string {
@@ -2314,6 +2342,13 @@ func padPlain(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-visibleWidth)
+}
+
+func frameLine(s string, width int) string {
+	if width <= 0 {
+		return s + "\x1b[K"
+	}
+	return padPlain(truncateVisible(s, width), width) + "\x1b[K"
 }
 
 func truncateVisible(s string, width int) string {
