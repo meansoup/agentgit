@@ -240,7 +240,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			m.clearNotice()
 			m.toggleTopLevelView()
-		case "left", "backspace":
+		case "left":
+			m.clearNotice()
+			if m.mode == modeDirectories {
+				m.collapseDirectoryEntry()
+			} else {
+				m.back()
+			}
+		case "backspace":
 			m.clearNotice()
 			m.back()
 		case "m":
@@ -831,6 +838,7 @@ func (m model) helpEntries() []helpEntry {
 		return append([]helpEntry{
 			{"up/down", "Move cursor", "select a directory or file path"},
 			{"enter/right", "Toggle/open", "toggle folders or open the selected file path"},
+			{"left", "Collapse", "collapse the selected depth to its parent folder"},
 			{"tab", "Commits", "switch back to commit list"},
 			{"r", "Refresh", "reload commits and request links"},
 			{"ctrl+c", "Quit", "exit agentgit"},
@@ -1590,7 +1598,7 @@ func (m model) viewSelectDetailsPreview() string {
 func (m model) viewDirectoryList(width int) string {
 	entries := m.visibleDirectoryEntries()
 	if len(entries) == 0 {
-		return mutedStyle.Render("no changed directories")
+		return mutedStyle.Render("no repository files")
 	}
 	var b strings.Builder
 	for i, entry := range entries {
@@ -1605,9 +1613,9 @@ func (m model) viewDirectoryList(width int) string {
 			name += "/"
 		}
 		indent := strings.Repeat("  ", entry.Depth)
-		detail := fmt.Sprintf("  %d commits", len(entry.CommitIndexes))
+		detail := ""
 		if entry.IsDir {
-			detail = fmt.Sprintf("  %d commits, %d files", len(entry.CommitIndexes), entry.FileCount)
+			detail = fmt.Sprintf("  %d files", entry.FileCount)
 		}
 		line := indent + mutedStyle.Render(kind) + " " + fileStyle.Render(name) + mutedStyle.Render(detail)
 		line = truncateVisible(line, width)
@@ -1636,11 +1644,14 @@ func (m model) viewDirectoryDetailsPreview() string {
 	b.WriteString(titleStyle.Render(title))
 	b.WriteString("\n")
 	b.WriteString(fileStyle.Render(path))
-	b.WriteString(mutedStyle.Render(fmt.Sprintf("  %d commits", len(entry.CommitIndexes))))
 	if entry.IsDir {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  %d files", entry.FileCount)))
 	}
 	b.WriteString("\n\n")
+	if len(entry.CommitIndexes) > 0 {
+		b.WriteString(mutedStyle.Render("Recent changes"))
+		b.WriteString("\n")
+	}
 	count := min(len(entry.CommitIndexes), 4)
 	for i := 0; i < count; i++ {
 		commit := m.commits[entry.CommitIndexes[i]]
@@ -1918,21 +1929,33 @@ func (m *model) loadCommitFilesAt(index int) {
 }
 
 func (m *model) loadDirectoryEntries() {
-	if len(m.commits) == 0 {
-		m.dirEntries = nil
-		return
+	files := currentDirectoryFilesFromCache(m.fileCache)
+	if m.root != "" {
+		var err error
+		files, err = git.WorktreeFiles(m.root)
+		if err != nil {
+			m.err = err
+			return
+		}
 	}
 	if m.fileCache == nil {
 		m.fileCache = map[string][]string{}
 	}
 	stats := map[string]*directoryStats{}
+	currentFiles := make(map[string]bool, len(files))
+	for _, file := range files {
+		currentFiles[file] = true
+		addDirectoryFile(stats, file)
+	}
 	for i, commit := range m.commits {
 		m.loadCommitFilesAt(i)
 		if m.err != nil {
 			return
 		}
 		for _, file := range m.fileCache[commit.Hash] {
-			addDirectoryStats(stats, file, i)
+			if currentFiles[file] {
+				addDirectoryCommit(stats, file, i)
+			}
 		}
 	}
 	entries := make([]directoryEntry, 0, len(stats))
@@ -1959,16 +1982,38 @@ func (m *model) loadDirectoryEntries() {
 	m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
 }
 
-func addDirectoryStats(stats map[string]*directoryStats, file string, commitIndex int) {
+func currentDirectoryFilesFromCache(fileCache map[string][]string) []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, cached := range fileCache {
+		for _, file := range cached {
+			if !seen[file] {
+				seen[file] = true
+				files = append(files, file)
+			}
+		}
+	}
+	sort.Strings(files)
+	return files
+}
+
+func addDirectoryFile(stats map[string]*directoryStats, file string) {
 	file = strings.Trim(file, "/")
 	if file == "" {
 		return
 	}
-	ensureDirectoryStats(stats, file, false).commitIndexes[commitIndex] = true
+	ensureDirectoryStats(stats, file, false)
 	for dir := pathDirectory(file); dir != ""; dir = pathDirectory(dir) {
 		stat := ensureDirectoryStats(stats, dir, true)
-		stat.commitIndexes[commitIndex] = true
 		stat.files[file] = true
+	}
+}
+
+func addDirectoryCommit(stats map[string]*directoryStats, file string, commitIndex int) {
+	for path := file; path != ""; path = pathDirectory(path) {
+		if stat, ok := stats[path]; ok {
+			stat.commitIndexes[commitIndex] = true
+		}
 	}
 }
 
@@ -2116,6 +2161,31 @@ func (m *model) enterDirectoryEntry() {
 	m.scroll = 0
 	m.fileReturn = modeDirectories
 	m.mode = modeFiles
+}
+
+func (m *model) collapseDirectoryEntry() {
+	entries := m.visibleDirectoryEntries()
+	if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
+		return
+	}
+	entry := entries[m.dirIdx]
+	if entry.IsDir && m.expanded[entry.Path] {
+		delete(m.expanded, entry.Path)
+		m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
+		return
+	}
+	parent := pathDirectory(entry.Path)
+	if parent == "" {
+		return
+	}
+	delete(m.expanded, parent)
+	for i, visible := range m.visibleDirectoryEntries() {
+		if visible.Path == parent {
+			m.dirIdx = i
+			return
+		}
+	}
+	m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
 }
 
 func (m model) filesForDirectoryEntry(entry directoryEntry, files []string) []string {

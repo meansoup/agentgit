@@ -294,6 +294,29 @@ func UncommittedFiles(root string) ([]string, error) {
 	return files, nil
 }
 
+func WorktreeFiles(root string) ([]string, error) {
+	out, err := RunBytes(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, raw := range bytes.Split(out, []byte{0}) {
+		path := string(raw)
+		if path == "" || seen[path] {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil || info.IsDir() {
+			continue
+		}
+		seen[path] = true
+		files = append(files, path)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
 func UnifiedDiff(root string, commitHash string, path string) ([]string, error) {
 	if commitHash == UncommittedHash {
 		return UncommittedDiff(root, path)

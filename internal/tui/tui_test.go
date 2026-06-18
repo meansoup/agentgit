@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -314,15 +317,29 @@ func TestEnterCommitDoesNotPreloadDiff(t *testing.T) {
 	}
 }
 
-func TestLoadDirectoryEntriesGroupsChangedFiles(t *testing.T) {
+func TestLoadDirectoryEntriesUsesCurrentWorktreeFiles(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
+	writeTUITestFile(t, root, "README.md", "readme\n")
+	writeTUITestFile(t, root, "deleted.txt", "deleted\n")
+	runTUITestGit(t, root, "add", ".")
+	runTUITestGit(t, root, "commit", "-m", "current files")
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeTUITestFile(t, root, "internal/hooks/hooks.go", "package hooks\n")
+	writeTUITestFile(t, root, "ignored.log", "ignored\n")
+	writeTUITestFile(t, root, ".gitignore", "*.log\n")
+
 	m := model{
+		root: root,
 		commits: []git.Commit{
 			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
 			{Hash: "c2", ShortHash: "c2", Subject: "older"},
 		},
 		fileCache: map[string][]string{
 			"c1": {"internal/tui/tui.go", "README.md"},
-			"c2": {"internal/hooks/hooks.go"},
+			"c2": {"internal/hooks/hooks.go", "deleted.txt"},
 		},
 	}
 
@@ -348,6 +365,12 @@ func TestLoadDirectoryEntriesGroupsChangedFiles(t *testing.T) {
 	}
 	if got := readme.CommitIndexes; len(got) != 1 || got[0] != 0 {
 		t.Fatalf("README.md CommitIndexes = %v, want [0]", got)
+	}
+	if _, ok := entries["ignored.log"]; ok {
+		t.Fatal("ignored file was included in directory entries")
+	}
+	if _, ok := entries["deleted.txt"]; ok {
+		t.Fatal("deleted tracked file was included in directory entries")
 	}
 }
 
@@ -430,6 +453,69 @@ func TestEnterDirectoryEntryTogglesFolderExpansion(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(collapsed, "\n"), "docs/PRD.md") {
 		t.Fatalf("collapsed entries still include docs/PRD.md: %v", collapsed)
+	}
+}
+
+func TestLeftCollapsesSelectedDirectory(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "c1", ShortHash: "c1", Subject: "newest"}},
+		fileCache: map[string][]string{
+			"c1": {"internal/tui/tui.go"},
+		},
+		expanded: map[string]bool{
+			"internal":     true,
+			"internal/tui": true,
+		},
+		mode: modeDirectories,
+	}
+	m.loadDirectoryEntries()
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == "internal/tui" {
+			m.dirIdx = i
+			break
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	got := updated.(model)
+
+	if got.expanded["internal/tui"] {
+		t.Fatal("selected directory remained expanded")
+	}
+	if got.visibleDirectoryEntries()[got.dirIdx].Path != "internal/tui" {
+		t.Fatalf("selected path = %q, want internal/tui", got.visibleDirectoryEntries()[got.dirIdx].Path)
+	}
+}
+
+func TestLeftFromFileCollapsesAndSelectsParentDirectory(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "c1", ShortHash: "c1", Subject: "newest"}},
+		fileCache: map[string][]string{
+			"c1": {"internal/tui/tui.go"},
+		},
+		expanded: map[string]bool{
+			"internal":     true,
+			"internal/tui": true,
+		},
+		mode: modeDirectories,
+	}
+	m.loadDirectoryEntries()
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == "internal/tui/tui.go" {
+			m.dirIdx = i
+			break
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	got := updated.(model)
+	entries := got.visibleDirectoryEntries()
+
+	if got.expanded["internal/tui"] {
+		t.Fatal("parent directory remained expanded")
+	}
+	if entries[got.dirIdx].Path != "internal/tui" {
+		t.Fatalf("selected path = %q, want internal/tui", entries[got.dirIdx].Path)
 	}
 }
 
@@ -653,5 +739,34 @@ func TestSelectedLatestRangeAllowsOnlyUncommittedForRemove(t *testing.T) {
 	}
 	if _, err := m.selectedLatestRange(false); err == nil {
 		t.Fatal("selectedLatestRange allowed uncommitted selection for merge")
+	}
+}
+
+func newTUITestRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runTUITestGit(t, root, "init")
+	runTUITestGit(t, root, "config", "user.email", "agentgit@example.test")
+	runTUITestGit(t, root, "config", "user.name", "agentgit")
+	return root
+}
+
+func writeTUITestFile(t *testing.T, root, path, content string) {
+	t.Helper()
+	fullPath := filepath.Join(root, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runTUITestGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
