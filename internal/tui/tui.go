@@ -115,11 +115,8 @@ var (
 	titleStyle     = lipgloss.NewStyle().Bold(true)
 	headerStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
 	contextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0")).Padding(0, 1)
-	footerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
-	statusStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
 	statusAltStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
 	keyStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
-	helpStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
 	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
@@ -345,7 +342,6 @@ func (m model) contentView() (string, int) {
 
 func (m model) viewFrame(content string, focusLine int) string {
 	header := m.viewHeader()
-	footer := m.viewFooter()
 
 	var staticTop string
 	if m.mode == modeCommits {
@@ -360,9 +356,8 @@ func (m model) viewFrame(content string, focusLine int) string {
 
 	topHeight := lipgloss.Height(staticTop)
 	headerHeight := lipgloss.Height(header)
-	footerHeight := lipgloss.Height(footer)
 
-	bodyHeight := max(0, m.height-headerHeight-footerHeight-topHeight)
+	bodyHeight := max(0, m.height-headerHeight-topHeight)
 	var body string
 	if m.mode == modeFiles {
 		body = m.viewFilesBody(bodyHeight)
@@ -374,7 +369,7 @@ func (m model) viewFrame(content string, focusLine int) string {
 	if staticTop != "" {
 		res += staticTop + "\n"
 	}
-	res += body + "\n" + footer
+	res += body + "\n"
 	return res
 }
 
@@ -385,7 +380,7 @@ func (m model) viewHeader() string {
 }
 
 func (m model) headerTitleLine() string {
-	return fmt.Sprintf("agentgit  view:%s  diff:%s  %s", m.modeName(), m.diffModeName(), m.selectionTitle())
+	return fmt.Sprintf("agentgit  ? Help  view:%s  diff:%s  %s", m.modeName(), m.diffModeName(), m.selectionTitle())
 }
 
 func (m model) contextLine(width int) string {
@@ -618,130 +613,6 @@ func (m model) fitPreviewContent(content string, height int, overflow string) st
 	return strings.Join(lines, "\n")
 }
 
-func (m model) helpText() string {
-	switch m.mode {
-	case modeCommits:
-		return "up/down move  enter/right files  tab directories  v request  r refresh  ctrl+c quit"
-	case modeSelect:
-		if m.pending != selectActionNone {
-			return "y confirm  n/esc cancel  ctrl+c quit"
-		}
-		return "up/down move  space select  x remove  m merge  s/left back  ctrl+c quit"
-	case modeDirectories:
-		return "up/down move  enter/right toggle/open  tab commits  r refresh  ctrl+c quit"
-	case modeFiles:
-		if m.selectedFileIsImage() {
-			return "up/down move  enter image  right diff  left/backspace back  r refresh  ctrl+c quit"
-		}
-		return "up/down move  enter/right diff  left/backspace back  r refresh  ctrl+c quit"
-	case modeDiff:
-		return "up/down scroll  pgup/pgdown page  n/p hunk  m split/unified  f full  left/backspace back  r refresh  ctrl+c quit"
-	case modeFullFile:
-		return "up/down scroll  pgup/pgdown page  f diff  left/backspace back  r refresh  ctrl+c quit"
-	case modeRequest:
-		return "up/down scroll  pgup/pgdown page  v back  left/backspace back  r refresh  ctrl+c quit"
-	default:
-		return "ctrl+c quit"
-	}
-}
-
-type shortcut struct {
-	keys   string
-	action string
-}
-
-func (m model) viewFooter() string {
-	status := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		statusStyle.Render(strings.ToUpper(m.modeName())),
-		statusAltStyle.Render("diff:"+m.diffModeName()),
-	)
-	line := status
-	for _, item := range m.shortcuts() {
-		line += "  " + keyStyle.Render(item.keys) + " " + helpStyle.Render(item.action)
-	}
-	line += "  " + keyStyle.Render("?") + " " + helpStyle.Render("help")
-	return footerStyle.Width(m.width).Render(truncateVisible(line, max(0, m.width-2)))
-}
-
-func (m model) shortcuts() []shortcut {
-	switch m.mode {
-	case modeCommits:
-		return []shortcut{
-			{"up/down", "move"},
-			{"enter/right", "files"},
-			{"tab", "dirs"},
-			{"s", "select"},
-			{"v", "request"},
-			{"r", "refresh"},
-			{"ctrl+c", "quit"},
-		}
-	case modeSelect:
-		if m.pending != selectActionNone {
-			return []shortcut{
-				{"y", "confirm"},
-				{"n/esc", "cancel"},
-				{"ctrl+c", "quit"},
-			}
-		}
-		return []shortcut{
-			{"up/down", "move"},
-			{"space", "select"},
-			{"x", "remove"},
-			{"m", "merge"},
-			{"s/left", "back"},
-			{"ctrl+c", "quit"},
-		}
-	case modeDirectories:
-		return []shortcut{
-			{"up/down", "move"},
-			{"enter/right", "toggle/open"},
-			{"tab", "commits"},
-			{"r", "refresh"},
-			{"ctrl+c", "quit"},
-		}
-	case modeFiles:
-		items := []shortcut{{"up/down", "move"}}
-		if m.selectedFileIsImage() {
-			items = append(items, shortcut{"enter", "image"}, shortcut{"right", "diff"})
-		} else {
-			items = append(items, shortcut{"enter/right", "diff"})
-		}
-		return append(items, shortcut{"left", "back"}, shortcut{"r", "refresh"}, shortcut{"ctrl+c", "quit"})
-	case modeDiff:
-		return []shortcut{
-			{"up/down", "scroll"},
-			{"pgup/pgdn", "page"},
-			{"n/p", "hunk"},
-			{"m", "mode"},
-			{"f", "full"},
-			{"left", "back"},
-			{"r", "refresh"},
-			{"ctrl+c", "quit"},
-		}
-	case modeFullFile:
-		return []shortcut{
-			{"up/down", "scroll"},
-			{"pgup/pgdn", "page"},
-			{"f", "diff"},
-			{"left", "back"},
-			{"r", "refresh"},
-			{"ctrl+c", "quit"},
-		}
-	case modeRequest:
-		return []shortcut{
-			{"up/down", "scroll"},
-			{"pgup/pgdn", "page"},
-			{"v", "back"},
-			{"left", "back"},
-			{"r", "refresh"},
-			{"ctrl+c", "quit"},
-		}
-	default:
-		return []shortcut{{"ctrl+c", "quit"}}
-	}
-}
-
 type helpEntry struct {
 	keys        string
 	action      string
@@ -750,13 +621,11 @@ type helpEntry struct {
 
 func (m model) viewHelpFrame() string {
 	header := m.viewHeader()
-	footer := m.viewFooter()
 	headerHeight := lipgloss.Height(header)
-	footerHeight := lipgloss.Height(footer)
-	bodyHeight := max(0, m.height-headerHeight-footerHeight)
+	bodyHeight := max(0, m.height-headerHeight)
 	dialog := m.viewHelpDialog(m.width, bodyHeight)
 	body := lipgloss.Place(m.width, bodyHeight, lipgloss.Center, lipgloss.Center, dialog)
-	return header + "\n" + body + "\n" + footer
+	return header + "\n" + body + "\n"
 }
 
 func (m model) viewHelpDialog(width int, height int) string {
@@ -926,9 +795,8 @@ func (m model) pageSize() int {
 		return 20
 	}
 	headerHeight := 2
-	footerHeight := 1
 	contentHeaderHeight := 2
-	return max(1, m.height-headerHeight-footerHeight-contentHeaderHeight)
+	return max(1, m.height-headerHeight-contentHeaderHeight)
 }
 
 func (m *model) jumpHunk(delta int) {

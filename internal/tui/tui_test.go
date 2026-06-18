@@ -296,16 +296,44 @@ func TestCtrlCQuits(t *testing.T) {
 	}
 }
 
-func TestFooterIncludesHelpShortcut(t *testing.T) {
+func TestHeaderIncludesOnlyPersistentHelpShortcut(t *testing.T) {
 	m := model{
 		mode:  modeFiles,
 		width: 120,
 	}
 
-	footer := ansi.Strip(m.viewFooter())
+	header := ansi.Strip(m.viewHeader())
 
-	if !strings.Contains(footer, "?") || !strings.Contains(footer, "help") {
-		t.Fatalf("footer missing help shortcut:\n%s", footer)
+	if !strings.Contains(header, "? Help") {
+		t.Fatalf("header missing help shortcut:\n%s", header)
+	}
+	for _, removed := range []string{"up/down", "enter/right", "ctrl+c quit"} {
+		if strings.Contains(header, removed) {
+			t.Fatalf("header retained footer shortcut %q:\n%s", removed, header)
+		}
+	}
+}
+
+func TestFrameUsesFormerFooterRowForContent(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:   []string{"file.go"},
+		diffLines: []string{
+			"@@ -1 +1 @@",
+			"-old",
+			"+new",
+		},
+		mode:   modeDiff,
+		width:  80,
+		height: 12,
+	}
+
+	view := m.View()
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("frame height = %d, want %d", got, m.height)
+	}
+	if strings.Contains(ansi.Strip(view), "ctrl+c quit") {
+		t.Fatalf("frame still contains footer shortcuts:\n%s", ansi.Strip(view))
 	}
 }
 
