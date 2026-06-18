@@ -67,6 +67,105 @@ func TestSplitDiffFitsNarrowWidths(t *testing.T) {
 	}
 }
 
+func TestLineNumberShortcutTogglesInDiffAndFullFile(t *testing.T) {
+	for _, mode := range []mode{modeDiff, modeFullFile} {
+		m := model{mode: mode}
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		got := updated.(model)
+		if !got.lineNums {
+			t.Fatalf("mode %v lineNums = false after l", mode)
+		}
+
+		updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		if updated.(model).lineNums {
+			t.Fatalf("mode %v lineNums = true after second l", mode)
+		}
+	}
+}
+
+func TestNumberUnifiedDiffLinesUsesOldAndNewLineNumbers(t *testing.T) {
+	lines := []string{
+		"@@ -10,2 +20,3 @@",
+		" context",
+		"-old",
+		"+new",
+		"+added",
+	}
+
+	got := numberUnifiedDiffLines(lines, 80)
+	stripped := make([]string, len(got))
+	for i, line := range got {
+		stripped[i] = ansi.Strip(line)
+	}
+
+	for i, want := range []string{
+		"@@ -10,2 +20,3 @@",
+		"10 20 │  context",
+		"11    │ -old",
+		"   21 │ +new",
+		"   22 │ +added",
+	} {
+		if !strings.Contains(stripped[i], want) {
+			t.Fatalf("numbered line %d = %q, want %q", i, stripped[i], want)
+		}
+	}
+}
+
+func TestSplitDiffLineNumbersTrackBothSides(t *testing.T) {
+	lines := []string{
+		"@@ -3,2 +8,2 @@",
+		" same",
+		"-old",
+		"+new",
+	}
+
+	got := splitDiffWithLineNumbers(lines, 31, true)
+	stripped := ansi.Strip(strings.Join(got, "\n"))
+	for _, want := range []string{"3 same", "8 same", "4 old", "9 new"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("numbered split diff missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
+func TestSplitDiffLineNumbersFitNarrowWidths(t *testing.T) {
+	lines := []string{
+		"@@ -100,1 +200,1 @@",
+		"-old",
+		"+new",
+	}
+	for _, width := range []int{3, 4, 8, 16} {
+		for _, line := range splitDiffWithLineNumbers(lines, width, true) {
+			if visible := ansi.StringWidth(ansi.Strip(line)); visible > width {
+				t.Fatalf("numbered split width %d rendered %d columns: %q", width, visible, line)
+			}
+		}
+	}
+}
+
+func TestViewFullFileNumbersScrolledLines(t *testing.T) {
+	m := model{
+		commits:   []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:     []string{"file.go"},
+		fullLines: []string{"one", "two", "three"},
+		mode:      modeFullFile,
+		lineNums:  true,
+		scroll:    1,
+		width:     80,
+	}
+
+	got := ansi.Strip(m.viewFullFile())
+	for _, want := range []string{"2 │ two", "3 │ three"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("full file view missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "1 │ one") {
+		t.Fatalf("full file view included scrolled line:\n%s", got)
+	}
+}
+
 func TestRequestPreviewMessageUsesFirstNonEmptyLine(t *testing.T) {
 	message := "\n\tOpen @lib/main.go\n\npackage main\nfunc main() {}\n"
 

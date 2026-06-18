@@ -71,6 +71,7 @@ type model struct {
 	err        error
 	notice     string
 	helpOpen   bool
+	lineNums   bool
 }
 
 type selectAction int
@@ -260,6 +261,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "f":
 			m.toggleFullFile()
+		case "l":
+			if m.mode == modeDiff || m.mode == modeFullFile {
+				m.lineNums = !m.lineNums
+			}
 		case "r":
 			m.clearNotice()
 			m.refresh()
@@ -865,6 +870,7 @@ func (m model) helpEntries() []helpEntry {
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"n/p", "Next/previous hunk", "jump between diff hunks"},
 			{"m", "Diff layout", "toggle unified and split diff"},
+			{"l", "Line numbers", "toggle old and new file line numbers"},
 			{"f", "Full file", "show the full file at this revision"},
 			{"left/backspace", "Back", "return to file list"},
 			{"r", "Refresh", "reload current commit data"},
@@ -873,6 +879,7 @@ func (m model) helpEntries() []helpEntry {
 		return append([]helpEntry{
 			{"up/down", "Scroll", "move through file lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"l", "Line numbers", "toggle file line numbers"},
 			{"f", "Diff", "return to diff view"},
 			{"left/backspace", "Back", "return to file list"},
 			{"r", "Refresh", "reload current commit data"},
@@ -1792,8 +1799,15 @@ func (m model) viewDiff() string {
 	if m.scroll >= len(lines) {
 		m.scroll = max(0, len(lines)-1)
 	}
+	if m.lineNums && m.diffMode == diffUnified {
+		lines = numberUnifiedDiffLines(lines, m.width)
+	}
 	for _, line := range lines[m.scroll:] {
-		b.WriteString(renderVisibleDiffLine(line, m.width, m.diffMode == diffSplit))
+		if m.lineNums && m.diffMode == diffUnified {
+			b.WriteString(line)
+		} else {
+			b.WriteString(renderVisibleDiffLine(line, m.width, m.diffMode == diffSplit))
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -1811,10 +1825,19 @@ func (m model) viewFullFile() string {
 	if m.scroll >= len(m.fullLines) {
 		m.scroll = max(0, len(m.fullLines)-1)
 	}
-	for _, line := range m.fullLines[m.scroll:] {
-		if m.width > 0 {
-			line = truncateVisible(line, m.width)
+	numberWidth := len(fmt.Sprint(max(1, len(m.fullLines))))
+	for i, line := range m.fullLines[m.scroll:] {
+		prefix := ""
+		if m.lineNums {
+			prefix = mutedStyle.Render(fmt.Sprintf("%*d │ ", numberWidth, m.scroll+i+1))
+			if m.width > 0 {
+				prefix = truncateVisible(prefix, m.width)
+			}
 		}
+		if m.width > 0 {
+			line = truncateVisible(line, max(1, m.width-lipgloss.Width(prefix)))
+		}
+		b.WriteString(prefix)
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
@@ -2268,7 +2291,7 @@ func (m model) visibleDiffLines() []string {
 		if m.width > 0 {
 			width = m.width
 		}
-		return splitDiff(m.diffLines, width)
+		return splitDiffWithLineNumbers(m.diffLines, width, m.lineNums)
 	}
 	return m.diffLines
 }
@@ -2313,42 +2336,60 @@ func renderDiffBackground(style lipgloss.Style, line string, width int) string {
 }
 
 func splitDiff(lines []string, width int) []string {
+	return splitDiffWithLineNumbers(lines, width, false)
+}
+
+type numberedDiffLine struct {
+	text   string
+	number int
+}
+
+func splitDiffWithLineNumbers(lines []string, width int, showNumbers bool) []string {
 	leftWidth, rightWidth := splitColumnWidths(width)
 	var out []string
-	var pending *string
+	var pending *numberedDiffLine
+	oldLine, newLine := 0, 0
+	numberWidth := diffLineNumberWidth(lines)
 	for _, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "@@"):
+		case strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "@@") || strings.HasPrefix(line, `\`):
 			if pending != nil {
-				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
+				out = append(out, formatSplitNumbered(pending.text, "", pending.number, 0, leftWidth, rightWidth, true, false, showNumbers, numberWidth))
 				pending = nil
 			}
-			out = append(out, line)
+			out = append(out, truncateVisible(line, width))
+			if strings.HasPrefix(line, "@@") {
+				oldLine, newLine = parseHunkStarts(line)
+			}
 		case strings.HasPrefix(line, "-"):
 			if pending != nil {
-				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
+				out = append(out, formatSplitNumbered(pending.text, "", pending.number, 0, leftWidth, rightWidth, true, false, showNumbers, numberWidth))
 			}
 			text := strings.TrimPrefix(line, "-")
-			pending = &text
+			pending = &numberedDiffLine{text: text, number: oldLine}
+			oldLine++
 		case strings.HasPrefix(line, "+"):
 			text := strings.TrimPrefix(line, "+")
 			if pending != nil {
-				out = append(out, formatSplit(*pending, text, leftWidth, rightWidth, true, true))
+				out = append(out, formatSplitNumbered(pending.text, text, pending.number, newLine, leftWidth, rightWidth, true, true, showNumbers, numberWidth))
 				pending = nil
 			} else {
-				out = append(out, formatSplit("", text, leftWidth, rightWidth, false, true))
+				out = append(out, formatSplitNumbered("", text, 0, newLine, leftWidth, rightWidth, false, true, showNumbers, numberWidth))
 			}
+			newLine++
 		default:
 			if pending != nil {
-				out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
+				out = append(out, formatSplitNumbered(pending.text, "", pending.number, 0, leftWidth, rightWidth, true, false, showNumbers, numberWidth))
 				pending = nil
 			}
 			text := strings.TrimPrefix(line, " ")
-			out = append(out, formatSplit(text, text, leftWidth, rightWidth, false, false))
+			out = append(out, formatSplitNumbered(text, text, oldLine, newLine, leftWidth, rightWidth, false, false, showNumbers, numberWidth))
+			oldLine++
+			newLine++
 		}
 	}
 	if pending != nil {
-		out = append(out, formatSplit(*pending, "", leftWidth, rightWidth, true, false))
+		out = append(out, formatSplitNumbered(pending.text, "", pending.number, 0, leftWidth, rightWidth, true, false, showNumbers, numberWidth))
 	}
 	return out
 }
@@ -2367,14 +2408,18 @@ func splitColumnWidths(width int) (int, int) {
 }
 
 func formatSplit(left, right string, leftWidth, rightWidth int, leftChanged, rightChanged bool) string {
+	return formatSplitNumbered(left, right, 0, 0, leftWidth, rightWidth, leftChanged, rightChanged, false, 0)
+}
+
+func formatSplitNumbered(left, right string, leftNumber, rightNumber, leftWidth, rightWidth int, leftChanged, rightChanged, showNumbers bool, numberWidth int) string {
 	if leftChanged {
 		left = ansi.Strip(left)
 	}
 	if rightChanged {
 		right = ansi.Strip(right)
 	}
-	leftCell := padPlain(truncateVisible(left, leftWidth), leftWidth)
-	rightCell := padPlain(truncateVisible(right, rightWidth), rightWidth)
+	leftCell := formatNumberedCell(left, leftNumber, leftWidth, showNumbers, numberWidth)
+	rightCell := formatNumberedCell(right, rightNumber, rightWidth, showNumbers, numberWidth)
 	if leftChanged {
 		leftCell = delLineStyle.Render(leftCell)
 	}
@@ -2385,6 +2430,89 @@ func formatSplit(left, right string, leftWidth, rightWidth int, leftChanged, rig
 		return leftCell
 	}
 	return leftCell + " │ " + rightCell
+}
+
+func formatNumberedCell(content string, number, width int, showNumbers bool, numberWidth int) string {
+	prefix := ""
+	if showNumbers {
+		value := ""
+		if number > 0 {
+			value = fmt.Sprint(number)
+		}
+		prefix = fmt.Sprintf("%*s ", numberWidth, value)
+		if lipgloss.Width(prefix) > width {
+			prefix = truncateVisible(prefix, width)
+		}
+	}
+	contentWidth := max(0, width-lipgloss.Width(prefix))
+	return prefix + padPlain(truncateVisible(content, contentWidth), contentWidth)
+}
+
+func numberUnifiedDiffLines(lines []string, width int) []string {
+	numberWidth := diffLineNumberWidth(lines)
+	oldLine, newLine := 0, 0
+	numbered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		oldNumber, newNumber := 0, 0
+		switch {
+		case strings.HasPrefix(line, "@@"):
+			oldLine, newLine = parseHunkStarts(line)
+		case strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, `\`):
+		case strings.HasPrefix(line, "-"):
+			oldNumber = oldLine
+			oldLine++
+		case strings.HasPrefix(line, "+"):
+			newNumber = newLine
+			newLine++
+		default:
+			oldNumber, newNumber = oldLine, newLine
+			oldLine++
+			newLine++
+		}
+		if oldNumber == 0 && newNumber == 0 {
+			numbered = append(numbered, renderVisibleDiffLine(line, width, false))
+			continue
+		}
+		oldText, newText := "", ""
+		if oldNumber > 0 {
+			oldText = fmt.Sprint(oldNumber)
+		}
+		if newNumber > 0 {
+			newText = fmt.Sprint(newNumber)
+		}
+		prefix := mutedStyle.Render(fmt.Sprintf("%*s %*s │ ", numberWidth, oldText, numberWidth, newText))
+		numbered = append(numbered, prefix+renderVisibleDiffLine(line, max(1, width-lipgloss.Width(prefix)), false))
+	}
+	return numbered
+}
+
+func diffLineNumberWidth(lines []string) int {
+	maxLine := 1
+	for _, line := range lines {
+		if strings.HasPrefix(line, "@@") {
+			oldLine, newLine := parseHunkStarts(line)
+			maxLine = max(maxLine, max(oldLine, newLine))
+		}
+	}
+	return len(fmt.Sprint(maxLine + len(lines)))
+}
+
+func parseHunkStarts(line string) (int, int) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return 0, 0
+	}
+	return parseDiffRangeStart(fields[1]), parseDiffRangeStart(fields[2])
+}
+
+func parseDiffRangeStart(value string) int {
+	value = strings.TrimLeft(value, "+-")
+	if comma := strings.IndexByte(value, ','); comma >= 0 {
+		value = value[:comma]
+	}
+	var start int
+	_, _ = fmt.Sscanf(value, "%d", &start)
+	return start
 }
 
 func joinColumns(leftLines, rightLines []string, leftWidth int) string {
