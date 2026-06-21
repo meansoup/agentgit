@@ -113,8 +113,12 @@ var (
 	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	cursorStyle    = lipgloss.NewStyle().Reverse(true)
 	titleStyle     = lipgloss.NewStyle().Bold(true)
-	headerStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8")).Padding(0, 1)
-	contextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0")).Padding(0, 1)
+	contextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0"))
+	viewStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
+	commandStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7"))
+	contextLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
+	viewLabel      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
+	commandLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
 	statusAltStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
 	keyStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
 	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -307,7 +311,7 @@ func (m model) View() string {
 	}
 	content, focusLine := m.contentView()
 	if m.width <= 0 || m.height <= 0 {
-		base := titleStyle.Render(m.headerTitleLine()) + "\n" + m.contextLine(120) + "\n\n" + content
+		base := m.viewHeaderAtWidth(120) + "\n\n" + content
 		if m.helpOpen {
 			return base + "\n\n" + m.viewHelpDialog(120, 0)
 		}
@@ -374,24 +378,44 @@ func (m model) viewFrame(content string, focusLine int) string {
 }
 
 func (m model) viewHeader() string {
-	title := headerStyle.Width(m.width).Render(truncateVisible(m.headerTitleLine(), max(0, m.width-2)))
-	context := contextStyle.Width(m.width).Render(truncateVisible(m.contextLine(max(0, m.width-2)), max(0, m.width-2)))
-	return title + "\n" + context
+	return m.viewHeaderAtWidth(m.width)
 }
 
-func (m model) headerTitleLine() string {
-	return fmt.Sprintf("agentgit  ? Help  view:%s  diff:%s  %s", m.modeName(), m.diffModeName(), m.selectionTitle())
+func (m model) viewHeaderAtWidth(width int) string {
+	return strings.Join([]string{
+		renderHeaderRow(width, "CONTEXT", m.contextLine(width), contextStyle, contextLabel),
+		renderHeaderRow(width, "VIEW", m.viewContextLine(), viewStyle, viewLabel),
+		renderHeaderRow(width, "COMMANDS", "[?] Help", commandStyle, commandLabel),
+	}, "\n")
+}
+
+func renderHeaderRow(width int, label, content string, rowStyle, labelStyle lipgloss.Style) string {
+	if width <= 0 {
+		return label + "  " + content
+	}
+	labelCell := labelStyle.Width(10).Render(label)
+	gap := 1
+	contentWidth := max(0, width-lipgloss.Width(labelCell)-gap)
+	line := labelCell
+	if contentWidth > 0 {
+		line += " " + truncateVisible(content, contentWidth)
+	}
+	return rowStyle.Width(width).Render(line)
 }
 
 func (m model) contextLine(width int) string {
 	base := compactPath(m.root, contextPathWidth(width))
-	return fmt.Sprintf("base %s  branch %s  head %s  commits %d  dirty %d",
+	return fmt.Sprintf("repo %s  branch %s  head %s  commits %d  dirty %d",
 		base,
 		emptyFallback(m.branch, "unknown"),
 		emptyFallback(m.head, "unknown"),
 		len(m.visibleCommits()),
 		m.dirtyFileCount(),
 	)
+}
+
+func (m model) viewContextLine() string {
+	return fmt.Sprintf("view: %s  diff: %s  target: %s", m.modeName(), m.diffModeName(), m.selectionTitle())
 }
 
 func (m model) selectionTitle() string {
@@ -794,7 +818,7 @@ func (m model) pageSize() int {
 	if m.height <= 0 {
 		return 20
 	}
-	headerHeight := 2
+	headerHeight := 3
 	contentHeaderHeight := 2
 	return max(1, m.height-headerHeight-contentHeaderHeight)
 }

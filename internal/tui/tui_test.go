@@ -219,10 +219,13 @@ func TestHeaderShowsRepoContext(t *testing.T) {
 
 	header := ansi.Strip(m.viewHeader())
 
-	for _, want := range []string{"view:commits", "base ", "branch main", "head 69e67e5", "commits 1", "dirty 2"} {
+	for _, want := range []string{"CONTEXT", "VIEW", "COMMANDS", "view: commits", "repo ", "branch main", "head 69e67e5", "commits 1", "dirty 2"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("header missing %q:\n%s", want, header)
 		}
+	}
+	if got := lipgloss.Height(m.viewHeader()); got != 3 {
+		t.Fatalf("header height = %d, want 3", got)
 	}
 }
 
@@ -304,12 +307,50 @@ func TestHeaderIncludesOnlyPersistentHelpShortcut(t *testing.T) {
 
 	header := ansi.Strip(m.viewHeader())
 
-	if !strings.Contains(header, "? Help") {
+	if !strings.Contains(header, "[?] Help") {
 		t.Fatalf("header missing help shortcut:\n%s", header)
 	}
 	for _, removed := range []string{"up/down", "enter/right", "ctrl+c quit"} {
 		if strings.Contains(header, removed) {
 			t.Fatalf("header retained footer shortcut %q:\n%s", removed, header)
+		}
+	}
+}
+
+func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
+	for _, width := range []int{24, 72, 140} {
+		for _, mode := range []mode{
+			modeCommits,
+			modeDirectories,
+			modeFiles,
+			modeDiff,
+			modeFullFile,
+			modeRequest,
+			modeSelect,
+		} {
+			m := model{
+				root:   "/Users/example/develop/git/agentgit",
+				branch: "main",
+				head:   "abcdef123456",
+				commits: []git.Commit{
+					{Hash: "abc", ShortHash: "abc", Subject: "a long selected item that changes by view"},
+				},
+				files: []string{"internal/tui/tui.go"},
+				mode:  mode,
+				width: width,
+			}
+			m.dirEntries = []directoryEntry{{Path: "internal", DisplayName: "internal", IsDir: true}}
+
+			header := m.viewHeader()
+			lines := strings.Split(header, "\n")
+			if len(lines) != 3 {
+				t.Fatalf("width %d mode %v header rows = %d, want 3:\n%s", width, mode, len(lines), ansi.Strip(header))
+			}
+			for i, line := range lines {
+				if got := ansi.StringWidth(ansi.Strip(line)); got != m.width {
+					t.Fatalf("width %d mode %v row %d width = %d, want %d: %q", width, mode, i, got, m.width, ansi.Strip(line))
+				}
+			}
 		}
 	}
 }
