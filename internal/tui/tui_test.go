@@ -299,7 +299,7 @@ func TestCtrlCQuits(t *testing.T) {
 	}
 }
 
-func TestHeaderIncludesOnlyPersistentHelpShortcut(t *testing.T) {
+func TestHeaderIncludesPersistentCommands(t *testing.T) {
 	m := model{
 		mode:  modeFiles,
 		width: 120,
@@ -307,8 +307,10 @@ func TestHeaderIncludesOnlyPersistentHelpShortcut(t *testing.T) {
 
 	header := ansi.Strip(m.viewHeader())
 
-	if !strings.Contains(header, "[?] Help") {
-		t.Fatalf("header missing help shortcut:\n%s", header)
+	for _, command := range []string{"[/] Search", "[?] Help"} {
+		if !strings.Contains(header, command) {
+			t.Fatalf("header missing command %q:\n%s", command, header)
+		}
 	}
 	for _, removed := range []string{"up/down", "enter/right", "ctrl+c quit"} {
 		if strings.Contains(header, removed) {
@@ -352,6 +354,145 @@ func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestSlashOpensFuzzyFileSearch(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
+	writeTUITestFile(t, root, "internal/hooks/hooks.go", "package hooks\n")
+	writeTUITestFile(t, root, "README.md", "readme\n")
+	m := model{
+		root:   root,
+		mode:   modeCommits,
+		width:  100,
+		height: 24,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	got := updated.(model)
+
+	if !got.searchOpen {
+		t.Fatal("searchOpen = false after /")
+	}
+	if len(got.searchResults) != 3 {
+		t.Fatalf("initial search results = %d, want 3", len(got.searchResults))
+	}
+	header := ansi.Strip(got.viewHeader())
+	for _, want := range []string{"view: search", "[Enter] Locate", "[Esc] Close"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("search header missing %q:\n%s", want, header)
+		}
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tui")})
+	got = updated.(model)
+	if got.searchText != "tui" {
+		t.Fatalf("searchText = %q, want tui", got.searchText)
+	}
+	if len(got.searchResults) == 0 || got.searchResults[0].Path != "internal/tui/tui.go" {
+		t.Fatalf("typed search results = %+v", got.searchResults)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	got = updated.(model)
+	if got.searchText != "tu" {
+		t.Fatalf("searchText after Backspace = %q, want tu", got.searchText)
+	}
+}
+
+func TestFuzzyFileSearchRanksConsecutiveBasenameMatches(t *testing.T) {
+	files := []string{
+		"docs/t-u-i.md",
+		"internal/hooks/tiny_util.go",
+		"internal/tui/tui.go",
+	}
+
+	results := fuzzyFileMatches(files, "tui")
+
+	if len(results) != 3 {
+		t.Fatalf("fuzzy results = %d, want 3", len(results))
+	}
+	if results[0].Path != "internal/tui/tui.go" {
+		t.Fatalf("top fuzzy result = %q, want internal/tui/tui.go", results[0].Path)
+	}
+}
+
+func TestSearchEnterRevealsFileInDirectoryView(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
+	writeTUITestFile(t, root, "internal/hooks/hooks.go", "package hooks\n")
+	m := model{
+		root: root,
+		mode: modeCommits,
+	}
+	m.openSearch()
+	m.searchText = "tuigo"
+	m.updateSearchResults()
+	if len(m.searchResults) == 0 || m.searchResults[0].Path != "internal/tui/tui.go" {
+		t.Fatalf("unexpected fuzzy results: %+v", m.searchResults)
+	}
+
+	updated, _ := m.updateSearch(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+	entries := got.visibleDirectoryEntries()
+
+	if got.searchOpen {
+		t.Fatal("search remained open after Enter")
+	}
+	if got.mode != modeDirectories {
+		t.Fatalf("mode = %v, want modeDirectories", got.mode)
+	}
+	if !got.expanded["internal"] || !got.expanded["internal/tui"] {
+		t.Fatalf("file ancestors were not expanded: %+v", got.expanded)
+	}
+	if len(entries) == 0 || entries[got.dirIdx].Path != "internal/tui/tui.go" {
+		t.Fatalf("selected directory entry = %+v", entries)
+	}
+}
+
+func TestSearchEscapeReturnsToPreviousView(t *testing.T) {
+	m := model{
+		mode:          modeDiff,
+		searchOpen:    true,
+		searchText:    "tui",
+		searchFiles:   []string{"internal/tui/tui.go"},
+		searchResults: fuzzyFileMatches([]string{"internal/tui/tui.go"}, "tui"),
+	}
+
+	updated, _ := m.updateSearch(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(model)
+
+	if got.searchOpen {
+		t.Fatal("search remained open after Esc")
+	}
+	if got.mode != modeDiff {
+		t.Fatalf("mode = %v, want previous modeDiff", got.mode)
+	}
+}
+
+func TestSearchBodyRendersOnlyVisibleResults(t *testing.T) {
+	results := make([]fileSearchResult, 1000)
+	for i := range results {
+		results[i] = fileSearchResult{Path: fmt.Sprintf("files/file-%04d.go", i)}
+	}
+	m := model{
+		searchOpen:    true,
+		searchIdx:     500,
+		searchResults: results,
+		width:         60,
+	}
+
+	body := ansi.Strip(m.viewSearchBody(7))
+
+	if got := lipgloss.Height(body); got != 7 {
+		t.Fatalf("search body height = %d, want 7", got)
+	}
+	if !strings.Contains(body, "file-0500.go") {
+		t.Fatalf("search body does not contain selected result:\n%s", body)
+	}
+	if strings.Contains(body, "file-0000.go") || strings.Contains(body, "file-0999.go") {
+		t.Fatalf("search body rendered offscreen results:\n%s", body)
 	}
 }
 

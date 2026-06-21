@@ -43,35 +43,40 @@ const (
 )
 
 type model struct {
-	root       string
-	branch     string
-	head       string
-	limit      int
-	commits    []git.Commit
-	links      map[string][]store.LinkedRequest
-	files      []string
-	diffLines  []string
-	fullLines  []string
-	dirEntries []directoryEntry
-	expanded   map[string]bool
-	fileCache  map[string][]string
-	diffCache  map[string][]string
-	fullCache  map[string][]string
-	selected   map[string]bool
-	mode       mode
-	fileReturn mode
-	diffMode   diffMode
-	pending    selectAction
-	commitIdx  int
-	dirIdx     int
-	fileIdx    int
-	scroll     int
-	width      int
-	height     int
-	err        error
-	notice     string
-	helpOpen   bool
-	lineNums   bool
+	root          string
+	branch        string
+	head          string
+	limit         int
+	commits       []git.Commit
+	links         map[string][]store.LinkedRequest
+	files         []string
+	diffLines     []string
+	fullLines     []string
+	dirEntries    []directoryEntry
+	expanded      map[string]bool
+	fileCache     map[string][]string
+	diffCache     map[string][]string
+	fullCache     map[string][]string
+	selected      map[string]bool
+	mode          mode
+	fileReturn    mode
+	diffMode      diffMode
+	pending       selectAction
+	commitIdx     int
+	dirIdx        int
+	fileIdx       int
+	scroll        int
+	width         int
+	height        int
+	err           error
+	notice        string
+	helpOpen      bool
+	lineNums      bool
+	searchOpen    bool
+	searchText    string
+	searchIdx     int
+	searchFiles   []string
+	searchResults []fileSearchResult
 }
 
 type selectAction int
@@ -84,6 +89,12 @@ const (
 
 type imageOpenMsg struct {
 	err error
+}
+
+type fileSearchResult struct {
+	Path      string
+	Positions []int
+	Score     int
 }
 
 type directoryEntry struct {
@@ -206,6 +217,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
+		if m.searchOpen {
+			return m.updateSearch(msg)
+		}
 		if m.helpOpen {
 			switch msg.String() {
 			case "?", "esc", "enter":
@@ -296,6 +310,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "?":
 			m.helpOpen = true
+		case "/":
+			m.openSearch()
 		}
 	case imageOpenMsg:
 		if msg.err != nil {
@@ -303,6 +319,87 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.closeSearch()
+	case "enter":
+		m.selectSearchResult()
+	case "up":
+		m.searchIdx = clamp(m.searchIdx-1, 0, len(m.searchResults)-1)
+	case "down":
+		m.searchIdx = clamp(m.searchIdx+1, 0, len(m.searchResults)-1)
+	case "backspace":
+		runes := []rune(m.searchText)
+		if len(runes) > 0 {
+			m.searchText = string(runes[:len(runes)-1])
+			m.updateSearchResults()
+		}
+	case "ctrl+u":
+		m.searchText = ""
+		m.updateSearchResults()
+	default:
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+			m.searchText += string(msg.Runes)
+			m.updateSearchResults()
+		}
+	}
+	return m, nil
+}
+
+func (m *model) openSearch() {
+	files, err := git.WorktreeFiles(m.root)
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.searchOpen = true
+	m.searchText = ""
+	m.searchIdx = 0
+	m.searchFiles = files
+	m.updateSearchResults()
+}
+
+func (m *model) closeSearch() {
+	m.searchOpen = false
+	m.searchText = ""
+	m.searchIdx = 0
+	m.searchFiles = nil
+	m.searchResults = nil
+}
+
+func (m *model) updateSearchResults() {
+	m.searchResults = fuzzyFileMatches(m.searchFiles, m.searchText)
+	m.searchIdx = clamp(m.searchIdx, 0, len(m.searchResults)-1)
+}
+
+func (m *model) selectSearchResult() {
+	if len(m.searchResults) == 0 || m.searchIdx < 0 || m.searchIdx >= len(m.searchResults) {
+		return
+	}
+	path := m.searchResults[m.searchIdx].Path
+	m.closeSearch()
+	m.loadDirectoryEntries()
+	if m.err != nil {
+		return
+	}
+	m.expanded = map[string]bool{}
+	for dir := pathDirectory(path); dir != ""; dir = pathDirectory(dir) {
+		m.expanded[dir] = true
+	}
+	m.mode = modeDirectories
+	m.scroll = 0
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == path {
+			m.dirIdx = i
+			return
+		}
+	}
+	m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
 }
 
 func (m model) View() string {
@@ -324,6 +421,9 @@ func (m model) View() string {
 }
 
 func (m model) contentView() (string, int) {
+	if m.searchOpen {
+		return "", m.searchIdx
+	}
 	switch m.mode {
 	case modeCommits:
 		return m.viewCommitsList(m.width), m.commitFocusLine()
@@ -348,7 +448,9 @@ func (m model) viewFrame(content string, focusLine int) string {
 	header := m.viewHeader()
 
 	var staticTop string
-	if m.mode == modeCommits {
+	if m.searchOpen {
+		staticTop = ""
+	} else if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
 	} else if m.mode == modeSelect {
 		staticTop = m.viewSelectDetailsPreview()
@@ -363,7 +465,9 @@ func (m model) viewFrame(content string, focusLine int) string {
 
 	bodyHeight := max(0, m.height-headerHeight-topHeight)
 	var body string
-	if m.mode == modeFiles {
+	if m.searchOpen {
+		body = m.viewSearchBody(bodyHeight)
+	} else if m.mode == modeFiles {
 		body = m.viewFilesBody(bodyHeight)
 	} else {
 		body = m.viewBody(content, bodyHeight, focusLine)
@@ -385,8 +489,141 @@ func (m model) viewHeaderAtWidth(width int) string {
 	return strings.Join([]string{
 		renderHeaderRow(width, "CONTEXT", m.contextLine(width), contextStyle, contextLabel),
 		renderHeaderRow(width, "VIEW", m.viewContextLine(), viewStyle, viewLabel),
-		renderHeaderRow(width, "COMMANDS", "[?] Help", commandStyle, commandLabel),
+		renderHeaderRow(width, "COMMANDS", m.commandContextLine(), commandStyle, commandLabel),
 	}, "\n")
+}
+
+func (m model) viewSearchBody(height int) string {
+	if height <= 0 {
+		return ""
+	}
+	if len(m.searchResults) == 0 {
+		lines := []string{frameLine(mutedStyle.Render("No matching files"), m.width)}
+		for len(lines) < height {
+			lines = append(lines, frameLine("", m.width))
+		}
+		return strings.Join(lines, "\n")
+	}
+	start := 0
+	if len(m.searchResults) > height {
+		start = clamp(m.searchIdx-height/2, 0, len(m.searchResults)-height)
+	}
+	end := min(len(m.searchResults), start+height)
+	lines := make([]string, 0, height)
+	for i := start; i < end; i++ {
+		result := m.searchResults[i]
+		line := renderFuzzyPath(result)
+		if i == m.searchIdx {
+			line = cursorStyle.Render(line)
+		}
+		lines = append(lines, frameLine(line, m.width))
+	}
+	for len(lines) < height {
+		lines = append(lines, frameLine("", m.width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func fuzzyFileMatches(files []string, query string) []fileSearchResult {
+	results := make([]fileSearchResult, 0, len(files))
+	for _, file := range files {
+		positions, score, ok := fuzzyPathMatch(file, query)
+		if !ok {
+			continue
+		}
+		results = append(results, fileSearchResult{
+			Path:      file,
+			Positions: positions,
+			Score:     score,
+		})
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if query == "" {
+			return results[i].Path < results[j].Path
+		}
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		if len(results[i].Path) != len(results[j].Path) {
+			return len(results[i].Path) < len(results[j].Path)
+		}
+		return results[i].Path < results[j].Path
+	})
+	return results
+}
+
+func fuzzyPathMatch(candidate, query string) ([]int, int, bool) {
+	if query == "" {
+		return nil, 0, true
+	}
+	candidateRunes := []rune(candidate)
+	queryRunes := []rune(strings.ToLower(query))
+	lowerCandidate := []rune(strings.ToLower(candidate))
+	basenameStart := 0
+	for i, char := range candidateRunes {
+		if char == '/' {
+			basenameStart = i + 1
+		}
+	}
+	positions := make([]int, 0, len(queryRunes))
+	searchFrom := 0
+	score := 0
+	lastPosition := -2
+	for _, target := range queryRunes {
+		position := -1
+		for i := searchFrom; i < len(lowerCandidate); i++ {
+			if lowerCandidate[i] == target {
+				position = i
+				break
+			}
+		}
+		if position < 0 {
+			return nil, 0, false
+		}
+		positions = append(positions, position)
+		score += 10
+		if position == lastPosition+1 {
+			score += 18
+		}
+		if position == 0 || candidateRunes[position-1] == '/' || candidateRunes[position-1] == '-' || candidateRunes[position-1] == '_' || candidateRunes[position-1] == '.' {
+			score += 14
+		}
+		if position >= basenameStart {
+			score += 5
+		}
+		lastPosition = position
+		searchFrom = position + 1
+	}
+	lowerQuery := strings.ToLower(query)
+	lowerBase := strings.ToLower(filepath.Base(filepath.FromSlash(candidate)))
+	if strings.Contains(lowerBase, lowerQuery) {
+		score += 100
+	}
+	if lowerBase == lowerQuery {
+		score += 100
+	}
+	score -= len(candidateRunes) / 4
+	return positions, score, true
+}
+
+func renderFuzzyPath(result fileSearchResult) string {
+	if len(result.Positions) == 0 {
+		return fileStyle.Render(result.Path)
+	}
+	matched := make(map[int]bool, len(result.Positions))
+	for _, position := range result.Positions {
+		matched[position] = true
+	}
+	var b strings.Builder
+	for i, char := range []rune(result.Path) {
+		text := string(char)
+		if matched[i] {
+			b.WriteString(markerStyle.Bold(true).Render(text))
+		} else {
+			b.WriteString(fileStyle.Render(text))
+		}
+	}
+	return b.String()
 }
 
 func renderHeaderRow(width int, label, content string, rowStyle, labelStyle lipgloss.Style) string {
@@ -415,7 +652,21 @@ func (m model) contextLine(width int) string {
 }
 
 func (m model) viewContextLine() string {
+	if m.searchOpen {
+		query := m.searchText
+		if query == "" {
+			query = "type to filter files"
+		}
+		return fmt.Sprintf("view: search  query: %s  matches: %d", query, len(m.searchResults))
+	}
 	return fmt.Sprintf("view: %s  diff: %s  target: %s", m.modeName(), m.diffModeName(), m.selectionTitle())
+}
+
+func (m model) commandContextLine() string {
+	if m.searchOpen {
+		return "[Enter] Locate  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
+	}
+	return "[/] Search  [?] Help"
 }
 
 func (m model) selectionTitle() string {
@@ -702,6 +953,7 @@ func (m model) viewHelpDialog(width int, height int) string {
 
 func (m model) helpEntries() []helpEntry {
 	entries := []helpEntry{
+		{"/", "Search files", "fuzzy find a current repository file"},
 		{"?", "Close help", "return to the current screen"},
 		{"ctrl+c", "Quit", "exit agentgit immediately"},
 	}

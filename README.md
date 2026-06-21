@@ -35,6 +35,7 @@ The top context bar shows the base path, Git branch, HEAD, commit count, and dir
 
 - **Move**: `Up`/`Down`
 - **Toggle Commit/Directory View**: `Tab`
+- **Search files**: `/`, type a fuzzy query, then `Enter` to reveal the file in Directory view
 - **Select latest commits**: `s`, then `Space` to select, `x` to remove, `m` to merge, `y` to confirm
 - **Directory folders**: `Enter`/`Right` toggles folders and opens files
 - **Drill down**: `Right` or `Enter` (Commit → Files → Diff)
