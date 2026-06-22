@@ -84,6 +84,108 @@ func TestLineNumberShortcutTogglesInDiffAndFullFile(t *testing.T) {
 	}
 }
 
+func TestWrapShortcutTogglesAndUsesUnifiedDiff(t *testing.T) {
+	for _, mode := range []mode{modeDiff, modeFullFile, modeRequest} {
+		m := model{mode: mode, diffMode: diffSplit, scroll: 5}
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+		got := updated.(model)
+
+		if !got.wrapLines {
+			t.Fatalf("mode %v wrapLines = false after w", mode)
+		}
+		if got.scroll != 0 {
+			t.Fatalf("mode %v scroll = %d, want 0", mode, got.scroll)
+		}
+		if mode == modeDiff && got.diffMode != diffUnified {
+			t.Fatalf("diff mode = %v, want unified while wrapping", got.diffMode)
+		}
+	}
+}
+
+func TestHardwrapLinePreservesCompleteContent(t *testing.T) {
+	line := "abcdefghijklmnopqrstuvwxyz"
+
+	got := hardwrapLine(line, 8)
+
+	if strings.Join(got, "") != line {
+		t.Fatalf("wrapped content = %q, want %q", strings.Join(got, ""), line)
+	}
+	for _, part := range got {
+		if width := ansi.StringWidth(part); width > 8 {
+			t.Fatalf("wrapped part width = %d, want <= 8: %q", width, part)
+		}
+		if strings.Contains(part, "...") {
+			t.Fatalf("wrapped part contains truncation marker: %q", part)
+		}
+	}
+}
+
+func TestWrappedDiffPreservesLongCodeLine(t *testing.T) {
+	m := model{
+		commits:   []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:     []string{"file.go"},
+		diffLines: []string{"@@ -1 +1 @@", "+abcdefghijklmnopqrstuvwxyz"},
+		mode:      modeDiff,
+		wrapLines: true,
+		width:     10,
+	}
+
+	got := ansi.Strip(m.viewDiff())
+	joined := strings.ReplaceAll(got, "\n", "")
+
+	if !strings.Contains(joined, "+abcdefghijklmnopqrstuvwxyz") {
+		t.Fatalf("wrapped diff lost code content:\n%s", got)
+	}
+	if strings.Contains(got, "...") {
+		t.Fatalf("wrapped diff contains truncation marker:\n%s", got)
+	}
+}
+
+func TestWrappedRequestPreservesLongLine(t *testing.T) {
+	message := "abcdefghijklmnopqrstuvwxyz"
+	m := model{
+		commits: []git.Commit{{Hash: "abc", ShortHash: "abc", Subject: "request"}},
+		links: map[string][]store.LinkedRequest{
+			"abc": {{AgentName: "codex", Model: "gpt", Message: message}},
+		},
+		mode:      modeRequest,
+		wrapLines: true,
+		width:     10,
+	}
+
+	got := ansi.Strip(m.viewRequestFull())
+	joined := strings.ReplaceAll(got, "\n", "")
+
+	if !strings.Contains(joined, message) {
+		t.Fatalf("wrapped request lost content:\n%s", got)
+	}
+	if strings.Contains(got, "...") {
+		t.Fatalf("wrapped request contains truncation marker:\n%s", got)
+	}
+}
+
+func TestWrappedFullFileScrollsByScreenRow(t *testing.T) {
+	m := model{
+		commits:   []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:     []string{"file.go"},
+		fullLines: []string{"abcdefghijkl"},
+		mode:      modeFullFile,
+		wrapLines: true,
+		scroll:    1,
+		width:     8,
+	}
+
+	got := ansi.Strip(m.viewFullFile())
+
+	if !strings.Contains(got, "ijkl") {
+		t.Fatalf("wrapped full file did not scroll into continuation row:\n%s", got)
+	}
+	if strings.Contains(got, "abcdefgh") {
+		t.Fatalf("wrapped full file retained row before scroll:\n%s", got)
+	}
+}
+
 func TestNumberUnifiedDiffLinesUsesOldAndNewLineNumbers(t *testing.T) {
 	lines := []string{
 		"@@ -10,2 +20,3 @@",
@@ -93,7 +195,7 @@ func TestNumberUnifiedDiffLinesUsesOldAndNewLineNumbers(t *testing.T) {
 		"+added",
 	}
 
-	got := numberUnifiedDiffLines(lines, 80)
+	got := numberUnifiedDiffLines(lines, 80, false)
 	stripped := make([]string, len(got))
 	for i, line := range got {
 		stripped[i] = ansi.Strip(line)
@@ -219,13 +321,13 @@ func TestHeaderShowsRepoContext(t *testing.T) {
 
 	header := ansi.Strip(m.viewHeader())
 
-	for _, want := range []string{"CONTEXT", "VIEW", "COMMANDS", "view: commits", "repo ", "branch main", "head 69e67e5", "commits 1", "dirty 2"} {
+	for _, want := range []string{"REPOSITORY", "GIT", "VIEW", "TARGET", "COMMANDS", "commits", "branch main", "head 69e67e5", "commits 1", "dirty 2"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("header missing %q:\n%s", want, header)
 		}
 	}
-	if got := lipgloss.Height(m.viewHeader()); got != 3 {
-		t.Fatalf("header height = %d, want 3", got)
+	if got := lipgloss.Height(m.viewHeader()); got != 5 {
+		t.Fatalf("header height = %d, want 5", got)
 	}
 }
 
@@ -345,8 +447,8 @@ func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
 
 			header := m.viewHeader()
 			lines := strings.Split(header, "\n")
-			if len(lines) != 3 {
-				t.Fatalf("width %d mode %v header rows = %d, want 3:\n%s", width, mode, len(lines), ansi.Strip(header))
+			if len(lines) != 5 {
+				t.Fatalf("width %d mode %v header rows = %d, want 5:\n%s", width, mode, len(lines), ansi.Strip(header))
 			}
 			for i, line := range lines {
 				if got := ansi.StringWidth(ansi.Strip(line)); got != m.width {
@@ -354,6 +456,36 @@ func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestHeaderSeparatesRepositoryGitViewAndTarget(t *testing.T) {
+	m := model{
+		root:   "/Users/example/develop/git/agentgit",
+		branch: "feature/header",
+		head:   "abcdef123456",
+		commits: []git.Commit{
+			{Hash: "abc", ShortHash: "abc", Subject: "selected commit"},
+		},
+		mode:  modeCommits,
+		width: 100,
+	}
+
+	lines := strings.Split(ansi.Strip(m.viewHeader()), "\n")
+
+	for i, label := range []string{"REPOSITORY", "GIT", "VIEW", "TARGET", "COMMANDS"} {
+		if !strings.Contains(lines[i], label) {
+			t.Fatalf("header row %d missing %s: %q", i, label, lines[i])
+		}
+	}
+	if strings.Contains(lines[0], "branch") || strings.Contains(lines[0], "selected commit") {
+		t.Fatalf("repository row contains unrelated context: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "branch feature/header") || strings.Contains(lines[1], "selected commit") {
+		t.Fatalf("git row is not isolated: %q", lines[1])
+	}
+	if !strings.Contains(lines[3], "selected commit") {
+		t.Fatalf("target row missing selection: %q", lines[3])
 	}
 }
 
@@ -379,7 +511,7 @@ func TestSlashOpensFuzzyFileSearch(t *testing.T) {
 		t.Fatalf("initial search results = %d, want 3", len(got.searchResults))
 	}
 	header := ansi.Strip(got.viewHeader())
-	for _, want := range []string{"view: search", "[Enter] Locate", "[Esc] Close"} {
+	for _, want := range []string{"search", "query type to filter files", "[Enter] Locate", "[Esc] Close"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("search header missing %q:\n%s", want, header)
 		}
@@ -519,20 +651,20 @@ func TestFrameUsesFormerFooterRowForContent(t *testing.T) {
 	}
 }
 
-func TestContextLineCompactsLongPath(t *testing.T) {
+func TestRepositoryContextLineCompactsLongPath(t *testing.T) {
 	m := model{
 		root:   "/very/long/path/that/will/not/fit/inside/the/context/window/agentgit",
 		branch: "main",
 		head:   "abcdef123456",
 	}
 
-	line := m.contextLine(48)
+	line := m.repositoryContextLine(48)
 
-	if width := lipgloss.Width(line); width > 120 {
-		t.Fatalf("contextLine width = %d, unexpectedly wide: %q", width, line)
+	if width := lipgloss.Width(line); width > 32 {
+		t.Fatalf("repository context width = %d, want <= 32: %q", width, line)
 	}
 	if !strings.Contains(line, "...") || !strings.Contains(line, "agentgit") {
-		t.Fatalf("contextLine did not compact path usefully: %q", line)
+		t.Fatalf("repository context did not compact path usefully: %q", line)
 	}
 }
 

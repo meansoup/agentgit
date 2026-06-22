@@ -72,6 +72,7 @@ type model struct {
 	notice        string
 	helpOpen      bool
 	lineNums      bool
+	wrapLines     bool
 	searchOpen    bool
 	searchText    string
 	searchIdx     int
@@ -269,6 +270,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "m":
 			if m.mode == modeSelect {
 				m.requestSelectAction(selectActionSquash)
+			} else if m.mode == modeDiff && m.wrapLines {
+				m.wrapLines = false
+				m.diffMode = diffSplit
 			} else if m.diffMode == diffUnified {
 				m.diffMode = diffSplit
 			} else {
@@ -279,6 +283,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "l":
 			if m.mode == modeDiff || m.mode == modeFullFile {
 				m.lineNums = !m.lineNums
+			}
+		case "w":
+			if m.mode == modeDiff || m.mode == modeFullFile || m.mode == modeRequest {
+				m.wrapLines = !m.wrapLines
+				m.scroll = 0
+				if m.wrapLines && m.mode == modeDiff {
+					m.diffMode = diffUnified
+				}
 			}
 		case "r":
 			m.clearNotice()
@@ -487,8 +499,10 @@ func (m model) viewHeader() string {
 
 func (m model) viewHeaderAtWidth(width int) string {
 	return strings.Join([]string{
-		renderHeaderRow(width, "CONTEXT", m.contextLine(width), contextStyle, contextLabel),
+		renderHeaderRow(width, "REPOSITORY", m.repositoryContextLine(width), contextStyle, contextLabel),
+		renderHeaderRow(width, "GIT", m.gitContextLine(), contextStyle, contextLabel),
 		renderHeaderRow(width, "VIEW", m.viewContextLine(), viewStyle, viewLabel),
+		renderHeaderRow(width, "TARGET", m.targetContextLine(), viewStyle, viewLabel),
 		renderHeaderRow(width, "COMMANDS", m.commandContextLine(), commandStyle, commandLabel),
 	}, "\n")
 }
@@ -630,7 +644,7 @@ func renderHeaderRow(width int, label, content string, rowStyle, labelStyle lipg
 	if width <= 0 {
 		return label + "  " + content
 	}
-	labelCell := labelStyle.Width(10).Render(label)
+	labelCell := labelStyle.Width(12).Render(label)
 	gap := 1
 	contentWidth := max(0, width-lipgloss.Width(labelCell)-gap)
 	line := labelCell
@@ -640,10 +654,12 @@ func renderHeaderRow(width int, label, content string, rowStyle, labelStyle lipg
 	return rowStyle.Width(width).Render(line)
 }
 
-func (m model) contextLine(width int) string {
-	base := compactPath(m.root, contextPathWidth(width))
-	return fmt.Sprintf("repo %s  branch %s  head %s  commits %d  dirty %d",
-		base,
+func (m model) repositoryContextLine(width int) string {
+	return compactPath(m.root, max(1, width-16))
+}
+
+func (m model) gitContextLine() string {
+	return fmt.Sprintf("branch %s  head %s  commits %d  dirty %d",
 		emptyFallback(m.branch, "unknown"),
 		emptyFallback(m.head, "unknown"),
 		len(m.visibleCommits()),
@@ -657,16 +673,45 @@ func (m model) viewContextLine() string {
 		if query == "" {
 			query = "type to filter files"
 		}
-		return fmt.Sprintf("view: search  query: %s  matches: %d", query, len(m.searchResults))
+		return fmt.Sprintf("search  query %s  matches %d", query, len(m.searchResults))
 	}
-	return fmt.Sprintf("view: %s  diff: %s  target: %s", m.modeName(), m.diffModeName(), m.selectionTitle())
+	wrap := ""
+	if m.mode == modeDiff || m.mode == modeFullFile || m.mode == modeRequest {
+		wrap = fmt.Sprintf("  wrap %s", onOff(m.wrapLines))
+	}
+	return fmt.Sprintf("%s  diff %s%s", m.modeName(), m.diffModeName(), wrap)
+}
+
+func (m model) targetContextLine() string {
+	if m.searchOpen {
+		if len(m.searchResults) == 0 || m.searchIdx < 0 || m.searchIdx >= len(m.searchResults) {
+			return "no matching files"
+		}
+		return m.searchResults[m.searchIdx].Path
+	}
+	return m.selectionTitle()
 }
 
 func (m model) commandContextLine() string {
 	if m.searchOpen {
 		return "[Enter] Locate  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
 	}
+	switch m.mode {
+	case modeDiff:
+		return "[w] Wrap  [l] Lines  [f] Full file  [/] Search  [?] Help"
+	case modeFullFile:
+		return "[w] Wrap  [l] Lines  [f] Diff  [/] Search  [?] Help"
+	case modeRequest:
+		return "[w] Wrap  [v] Back  [/] Search  [?] Help"
+	}
 	return "[/] Search  [?] Help"
+}
+
+func onOff(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }
 
 func (m model) selectionTitle() string {
@@ -737,13 +782,6 @@ func compactPath(path string, width int) string {
 		return takeVisible(path, width)
 	}
 	return "..." + takeVisibleFromEnd(path, width-3)
-}
-
-func contextPathWidth(width int) int {
-	if width <= 0 {
-		return 40
-	}
-	return clamp(width/2, 24, 80)
 }
 
 func emptyFallback(value, fallback string) string {
@@ -1016,6 +1054,7 @@ func (m model) helpEntries() []helpEntry {
 			{"n/p", "Next/previous hunk", "jump between diff hunks"},
 			{"m", "Diff layout", "toggle unified and split diff"},
 			{"l", "Line numbers", "toggle old and new file line numbers"},
+			{"w", "Wrap lines", "show complete long lines; switches split diff to unified"},
 			{"f", "Full file", "show the full file at this revision"},
 			{"left/backspace", "Back", "return to file list"},
 			{"r", "Refresh", "reload current commit data"},
@@ -1025,6 +1064,7 @@ func (m model) helpEntries() []helpEntry {
 			{"up/down", "Scroll", "move through file lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"l", "Line numbers", "toggle file line numbers"},
+			{"w", "Wrap lines", "show complete long lines across multiple screen rows"},
 			{"f", "Diff", "return to diff view"},
 			{"left/backspace", "Back", "return to file list"},
 			{"r", "Refresh", "reload current commit data"},
@@ -1033,6 +1073,7 @@ func (m model) helpEntries() []helpEntry {
 		return append([]helpEntry{
 			{"up/down", "Scroll", "move through request text"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"w", "Wrap lines", "show complete long request lines"},
 			{"v", "Back", "return to commit list"},
 			{"left/backspace", "Back", "return to file list"},
 			{"r", "Refresh", "reload request links"},
@@ -1070,7 +1111,7 @@ func (m model) pageSize() int {
 	if m.height <= 0 {
 		return 20
 	}
-	headerHeight := 3
+	headerHeight := 5
 	contentHeaderHeight := 2
 	return max(1, m.height-headerHeight-contentHeaderHeight)
 }
@@ -1079,10 +1120,10 @@ func (m *model) jumpHunk(delta int) {
 	if m.mode != modeDiff || len(m.diffLines) == 0 {
 		return
 	}
-	lines := m.visibleDiffLines()
+	lines := m.renderedDiffLines()
 	var hunks []int
 	for i, line := range lines {
-		if strings.HasPrefix(line, "@@") {
+		if strings.HasPrefix(ansi.Strip(line), "@@") {
 			hunks = append(hunks, i)
 		}
 	}
@@ -1620,6 +1661,9 @@ func (m model) viewRequestFull() string {
 	}
 
 	lines := splitViewLines(b.String())
+	if m.wrapLines {
+		lines = hardwrapLines(lines, m.width)
+	}
 	if m.scroll >= len(lines) {
 		m.scroll = max(0, len(lines)-1)
 	}
@@ -1939,22 +1983,31 @@ func (m model) viewDiff() string {
 	b.WriteByte(' ')
 	b.WriteString(fileStyle.Render(m.files[m.fileIdx]))
 	b.WriteString("\n\n")
-	lines := m.visibleDiffLines()
+	lines := m.renderedDiffLines()
 	if m.scroll >= len(lines) {
 		m.scroll = max(0, len(lines)-1)
 	}
-	if m.lineNums && m.diffMode == diffUnified {
-		lines = numberUnifiedDiffLines(lines, m.width)
-	}
 	for _, line := range lines[m.scroll:] {
-		if m.lineNums && m.diffMode == diffUnified {
-			b.WriteString(line)
-		} else {
-			b.WriteString(renderVisibleDiffLine(line, m.width, m.diffMode == diffSplit))
-		}
+		b.WriteString(line)
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func (m model) renderedDiffLines() []string {
+	lines := m.visibleDiffLines()
+	if m.lineNums && m.diffMode == diffUnified {
+		return numberUnifiedDiffLines(lines, m.width, m.wrapLines)
+	}
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if m.wrapLines {
+			rendered = append(rendered, hardwrapLine(styleDiffLine(line, m.width), m.width)...)
+		} else {
+			rendered = append(rendered, renderVisibleDiffLine(line, m.width, m.diffMode == diffSplit))
+		}
+	}
+	return rendered
 }
 
 func (m model) viewFullFile() string {
@@ -1966,26 +2019,47 @@ func (m model) viewFullFile() string {
 	b.WriteByte(' ')
 	b.WriteString(fileStyle.Render(m.files[m.fileIdx]))
 	b.WriteString(" (Full File)\n\n")
-	if m.scroll >= len(m.fullLines) {
-		m.scroll = max(0, len(m.fullLines)-1)
+	lines := m.renderedFullFileLines()
+	if m.scroll >= len(lines) {
+		m.scroll = max(0, len(lines)-1)
 	}
-	numberWidth := len(fmt.Sprint(max(1, len(m.fullLines))))
-	for i, line := range m.fullLines[m.scroll:] {
-		prefix := ""
-		if m.lineNums {
-			prefix = mutedStyle.Render(fmt.Sprintf("%*d │ ", numberWidth, m.scroll+i+1))
-			if m.width > 0 {
-				prefix = truncateVisible(prefix, m.width)
-			}
-		}
-		if m.width > 0 {
-			line = truncateVisible(line, max(1, m.width-lipgloss.Width(prefix)))
-		}
-		b.WriteString(prefix)
+	for _, line := range lines[m.scroll:] {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func (m model) renderedFullFileLines() []string {
+	numberWidth := len(fmt.Sprint(max(1, len(m.fullLines))))
+	rendered := make([]string, 0, len(m.fullLines))
+	for i, line := range m.fullLines {
+		prefix := ""
+		if m.lineNums {
+			prefix = mutedStyle.Render(fmt.Sprintf("%*d │ ", numberWidth, i+1))
+			if m.width > 0 {
+				prefix = truncateVisible(prefix, m.width)
+			}
+		}
+		contentWidth := m.width - lipgloss.Width(prefix)
+		if !m.wrapLines {
+			if m.width > 0 {
+				line = truncateVisible(line, max(1, contentWidth))
+			}
+			rendered = append(rendered, prefix+line)
+			continue
+		}
+		contentWidth = max(1, contentWidth)
+		parts := hardwrapLine(line, contentWidth)
+		for partIndex, part := range parts {
+			if partIndex == 0 {
+				rendered = append(rendered, prefix+part)
+			} else {
+				rendered = append(rendered, strings.Repeat(" ", lipgloss.Width(prefix))+part)
+			}
+		}
+	}
+	return rendered
 }
 
 func (m *model) loadFullFile() {
@@ -2592,7 +2666,7 @@ func formatNumberedCell(content string, number, width int, showNumbers bool, num
 	return prefix + padPlain(truncateVisible(content, contentWidth), contentWidth)
 }
 
-func numberUnifiedDiffLines(lines []string, width int) []string {
+func numberUnifiedDiffLines(lines []string, width int, wrap bool) []string {
 	numberWidth := diffLineNumberWidth(lines)
 	oldLine, newLine := 0, 0
 	numbered := make([]string, 0, len(lines))
@@ -2614,7 +2688,13 @@ func numberUnifiedDiffLines(lines []string, width int) []string {
 			newLine++
 		}
 		if oldNumber == 0 && newNumber == 0 {
-			numbered = append(numbered, renderVisibleDiffLine(line, width, false))
+			rendered := renderVisibleDiffLine(line, width, false)
+			if wrap {
+				rendered = styleDiffLine(line, width)
+				numbered = append(numbered, hardwrapLine(rendered, width)...)
+			} else {
+				numbered = append(numbered, rendered)
+			}
 			continue
 		}
 		oldText, newText := "", ""
@@ -2625,9 +2705,36 @@ func numberUnifiedDiffLines(lines []string, width int) []string {
 			newText = fmt.Sprint(newNumber)
 		}
 		prefix := mutedStyle.Render(fmt.Sprintf("%*s %*s │ ", numberWidth, oldText, numberWidth, newText))
-		numbered = append(numbered, prefix+renderVisibleDiffLine(line, max(1, width-lipgloss.Width(prefix)), false))
+		contentWidth := max(1, width-lipgloss.Width(prefix))
+		if !wrap {
+			numbered = append(numbered, prefix+renderVisibleDiffLine(line, contentWidth, false))
+			continue
+		}
+		wrapped := hardwrapLine(styleDiffLine(line, contentWidth), contentWidth)
+		for i, part := range wrapped {
+			if i == 0 {
+				numbered = append(numbered, prefix+part)
+			} else {
+				numbered = append(numbered, strings.Repeat(" ", lipgloss.Width(prefix))+part)
+			}
+		}
 	}
 	return numbered
+}
+
+func hardwrapLines(lines []string, width int) []string {
+	var wrapped []string
+	for _, line := range lines {
+		wrapped = append(wrapped, hardwrapLine(line, width)...)
+	}
+	return wrapped
+}
+
+func hardwrapLine(line string, width int) []string {
+	if width <= 0 || ansi.StringWidth(line) <= width {
+		return []string{line}
+	}
+	return strings.Split(ansi.Hardwrap(line, width, true), "\n")
 }
 
 func diffLineNumberWidth(lines []string) int {
