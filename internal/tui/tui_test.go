@@ -982,15 +982,20 @@ func TestTabTogglesBetweenCommitAndDirectoryViews(t *testing.T) {
 	}
 }
 
-func TestEnterDirectoryEntryOpensLatestMatchingCommitFiles(t *testing.T) {
+func TestEnterDirectoryEntryOpensCurrentWorktreeFile(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "internal/tui/tui.go", "committed content\n")
+	runTUITestGit(t, root, "add", ".")
+	runTUITestGit(t, root, "commit", "-m", "committed")
+	writeTUITestFile(t, root, "internal/tui/tui.go", "current worktree content\n")
+
 	m := model{
+		root: root,
 		commits: []git.Commit{
 			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
-			{Hash: "c2", ShortHash: "c2", Subject: "older"},
 		},
 		fileCache: map[string][]string{
 			"c1": {"internal/tui/tui.go", "README.md"},
-			"c2": {"internal/hooks/hooks.go"},
 		},
 		mode: modeDirectories,
 	}
@@ -1005,19 +1010,30 @@ func TestEnterDirectoryEntryOpensLatestMatchingCommitFiles(t *testing.T) {
 
 	m.enter(false)
 
-	if m.mode != modeFiles {
-		t.Fatalf("mode = %v, want modeFiles", m.mode)
+	if m.mode != modeFullFile {
+		t.Fatalf("mode = %v, want modeFullFile", m.mode)
 	}
-	if m.commitIdx != 0 {
-		t.Fatalf("commitIdx = %d, want 0", m.commitIdx)
+	if !m.worktreeFile {
+		t.Fatal("worktreeFile = false, want true")
 	}
 	if len(m.files) != 1 || m.files[0] != "internal/tui/tui.go" {
-		t.Fatalf("files = %v, want latest internal files only", m.files)
+		t.Fatalf("files = %v, want selected worktree file", m.files)
+	}
+	content := ansi.Strip(strings.Join(m.fullLines, "\n"))
+	if !strings.Contains(content, "current worktree content") {
+		t.Fatalf("full file does not contain current content: %q", content)
+	}
+	if strings.Contains(content, "committed content") {
+		t.Fatalf("full file contains committed content instead of current content: %q", content)
 	}
 }
 
 func TestBackFromDirectoryFileRestoresDirectoryDepth(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
+	writeTUITestFile(t, root, "internal/hooks/hooks.go", "package hooks\n")
 	m := model{
+		root: root,
 		commits: []git.Commit{
 			{Hash: "c1", ShortHash: "c1", Subject: "newest"},
 		},
@@ -1041,28 +1057,62 @@ func TestBackFromDirectoryFileRestoresDirectoryDepth(t *testing.T) {
 
 	m.enter(false)
 
-	if m.mode != modeFiles {
-		t.Fatalf("mode after opening directory file = %v, want modeFiles", m.mode)
+	if m.mode != modeFullFile {
+		t.Fatalf("mode after opening directory file = %v, want modeFullFile", m.mode)
 	}
 	if m.fileReturn != modeDirectories {
 		t.Fatalf("fileReturn = %v, want modeDirectories", m.fileReturn)
 	}
 
-	m.mode = modeDiff
 	m.back()
-	if m.mode != modeFiles {
-		t.Fatalf("mode after leaving diff = %v, want modeFiles", m.mode)
-	}
-	m.back()
-
 	if m.mode != modeDirectories {
-		t.Fatalf("mode after leaving files = %v, want modeDirectories", m.mode)
+		t.Fatalf("mode after leaving current file = %v, want modeDirectories", m.mode)
 	}
 	if m.dirIdx != wantDirIdx {
 		t.Fatalf("dirIdx = %d, want %d", m.dirIdx, wantDirIdx)
 	}
 	if !m.expanded["internal"] || !m.expanded["internal/tui"] {
 		t.Fatalf("expanded directory depth was lost: %+v", m.expanded)
+	}
+}
+
+func TestRefreshCurrentDirectoryFileReloadsWorktreeContent(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "current.txt", "before refresh\n")
+	runTUITestGit(t, root, "add", ".")
+	runTUITestGit(t, root, "commit", "-m", "base")
+	commits, err := git.CommitsWithUncommitted(root, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := model{
+		root:      root,
+		limit:     10,
+		commits:   commits,
+		links:     map[string][]store.LinkedRequest{},
+		fileCache: map[string][]string{},
+		diffCache: map[string][]string{},
+		fullCache: map[string][]string{},
+		expanded:  map[string]bool{},
+		mode:      modeDirectories,
+	}
+	m.loadDirectoryEntries()
+	for i, entry := range m.visibleDirectoryEntries() {
+		if entry.Path == "current.txt" {
+			m.dirIdx = i
+			break
+		}
+	}
+	m.enter(false)
+	writeTUITestFile(t, root, "current.txt", "after refresh\n")
+
+	m.refresh()
+
+	if m.mode != modeFullFile || !m.worktreeFile {
+		t.Fatalf("mode/worktree after refresh = %v/%v", m.mode, m.worktreeFile)
+	}
+	if got := ansi.Strip(strings.Join(m.fullLines, "\n")); !strings.Contains(got, "after refresh") {
+		t.Fatalf("refreshed content = %q, want current worktree content", got)
 	}
 }
 

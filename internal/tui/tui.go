@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +61,7 @@ type model struct {
 	selected      map[string]bool
 	mode          mode
 	fileReturn    mode
+	worktreeFile  bool
 	diffMode      diffMode
 	pending       selectAction
 	commitIdx     int
@@ -700,6 +702,9 @@ func (m model) commandContextLine() string {
 	case modeDiff:
 		return "[w] Wrap  [l] Lines  [f] Full file  [/] Search  [?] Help"
 	case modeFullFile:
+		if m.worktreeFile {
+			return "[w] Wrap  [l] Lines  [/] Search  [?] Help"
+		}
 		return "[w] Wrap  [l] Lines  [f] Diff  [/] Search  [?] Help"
 	case modeRequest:
 		return "[w] Wrap  [v] Back  [/] Search  [?] Help"
@@ -1033,11 +1038,20 @@ func (m model) helpEntries() []helpEntry {
 		}, entries...)
 	case modeFiles:
 		if m.selectedFileIsImage() {
+			openDescription := "open the image with the system viewer"
+			rightAction := "Open file"
+			rightDescription := "show current file information"
+			backDescription := "return to directories"
+			if !m.worktreeFile {
+				rightAction = "Open diff"
+				rightDescription = "show the file diff"
+				backDescription = "return to commits"
+			}
 			return append([]helpEntry{
 				{"up/down", "Move cursor", "select a changed file"},
-				{"enter", "Open image", "open the image with the system viewer"},
-				{"right", "Open diff", "show the file diff"},
-				{"left/backspace", "Back", "return to commits"},
+				{"enter", "Open image", openDescription},
+				{"right", rightAction, rightDescription},
+				{"left/backspace", "Back", backDescription},
 				{"r", "Refresh", "reload commits and files"},
 			}, entries...)
 		}
@@ -1060,15 +1074,22 @@ func (m model) helpEntries() []helpEntry {
 			{"r", "Refresh", "reload current commit data"},
 		}, entries...)
 	case modeFullFile:
-		return append([]helpEntry{
+		fullEntries := []helpEntry{
 			{"up/down", "Scroll", "move through file lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"l", "Line numbers", "toggle file line numbers"},
 			{"w", "Wrap lines", "show complete long lines across multiple screen rows"},
-			{"f", "Diff", "return to diff view"},
-			{"left/backspace", "Back", "return to file list"},
 			{"r", "Refresh", "reload current commit data"},
-		}, entries...)
+		}
+		if m.worktreeFile {
+			fullEntries = append(fullEntries, helpEntry{"left/backspace", "Back", "return to directory view"})
+		} else {
+			fullEntries = append(fullEntries,
+				helpEntry{"f", "Diff", "return to diff view"},
+				helpEntry{"left/backspace", "Back", "return to file list"},
+			)
+		}
+		return append(fullEntries, entries...)
 	case modeRequest:
 		return append([]helpEntry{
 			{"up/down", "Scroll", "move through request text"},
@@ -1162,6 +1183,7 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		m.fileReturn = modeCommits
+		m.worktreeFile = false
 		m.mode = modeFiles
 	case modeSelect:
 		m.toggleSelectedCommit()
@@ -1173,6 +1195,14 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		}
 		if openImages && m.selectedFileIsImage() {
 			return m.openSelectedImage()
+		}
+		if m.worktreeFile {
+			m.loadWorktreeFile()
+			if m.err == nil {
+				m.scroll = 0
+				m.mode = modeFullFile
+			}
+			return nil
 		}
 		m.loadSelectedDiff()
 		if m.err != nil {
@@ -1186,11 +1216,19 @@ func (m *model) enter(openImages bool) tea.Cmd {
 
 func (m *model) back() {
 	switch m.mode {
-	case modeDiff, modeFullFile, modeRequest:
+	case modeFullFile:
+		if m.worktreeFile {
+			m.mode = modeDirectories
+			m.worktreeFile = false
+		} else {
+			m.mode = modeFiles
+		}
+	case modeDiff, modeRequest:
 		m.mode = modeFiles
 	case modeFiles:
 		if m.fileReturn == modeDirectories {
 			m.mode = modeDirectories
+			m.worktreeFile = false
 		} else {
 			m.mode = modeCommits
 		}
@@ -1235,6 +1273,8 @@ func (m *model) refresh() {
 	if len(m.files) > 0 && m.fileIdx >= 0 && m.fileIdx < len(m.files) {
 		selectedFile = m.files[m.fileIdx]
 	}
+	directoryContext := m.mode == modeDirectories ||
+		((m.mode == modeFiles || m.mode == modeFullFile) && m.fileReturn == modeDirectories)
 
 	commits, err := git.CommitsWithUncommitted(m.root, m.limit)
 	if err != nil {
@@ -1255,7 +1295,7 @@ func (m *model) refresh() {
 	m.fullCache = map[string][]string{}
 	m.selected = keepExistingSelections(m.selected, commits)
 	m.pending = selectActionNone
-	if m.mode != modeDirectories && !(m.mode == modeFiles && m.fileReturn == modeDirectories) {
+	if !directoryContext {
 		m.expanded = map[string]bool{}
 	}
 	m.dirEntries = nil
@@ -1272,7 +1312,7 @@ func (m *model) refresh() {
 		}
 	}
 	m.loadCommitFiles()
-	if m.mode == modeDirectories || (m.mode == modeFiles && m.fileReturn == modeDirectories) {
+	if directoryContext {
 		m.loadDirectoryEntries()
 		m.dirIdx = 0
 		for i, entry := range m.visibleDirectoryEntries() {
@@ -1282,13 +1322,16 @@ func (m *model) refresh() {
 			}
 		}
 	}
-	if len(m.commits) == 0 {
+	if len(m.commits) == 0 && !m.worktreeFile {
 		m.files = nil
 		m.fileIdx = 0
 		m.mode = modeCommits
 		return
 	}
-	if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest && m.mode != modeSelect {
+	if m.worktreeFile {
+		m.files = []string{selectedFile}
+		m.fileIdx = 0
+	} else if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest && m.mode != modeSelect {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		for i, file := range m.files {
@@ -1301,9 +1344,13 @@ func (m *model) refresh() {
 			m.mode = modeCommits
 			return
 		}
-		if m.mode == modeDiff {
-			m.loadSelectedDiff()
-		} else if m.mode == modeFullFile {
+	}
+	if m.mode == modeDiff {
+		m.loadSelectedDiff()
+	} else if m.mode == modeFullFile {
+		if m.worktreeFile {
+			m.loadWorktreeFile()
+		} else {
 			m.loadFullFile()
 		}
 	}
@@ -1678,6 +1725,9 @@ func (m *model) toggleFullFile() {
 			m.scroll = 0
 		}
 	} else if m.mode == modeFullFile {
+		if m.worktreeFile {
+			return
+		}
 		m.mode = modeDiff
 		m.scroll = 0
 	}
@@ -2012,10 +2062,14 @@ func (m model) renderedDiffLines() []string {
 
 func (m model) viewFullFile() string {
 	var b strings.Builder
-	if len(m.commits) == 0 || len(m.files) == 0 {
+	if len(m.files) == 0 || (!m.worktreeFile && len(m.commits) == 0) {
 		return ""
 	}
-	b.WriteString(hashStyle.Render(m.commits[m.commitIdx].ShortHash))
+	if m.worktreeFile {
+		b.WriteString(markerStyle.Render("working tree"))
+	} else {
+		b.WriteString(hashStyle.Render(m.commits[m.commitIdx].ShortHash))
+	}
 	b.WriteByte(' ')
 	b.WriteString(fileStyle.Render(m.files[m.fileIdx]))
 	b.WriteString(" (Full File)\n\n")
@@ -2084,8 +2138,43 @@ func (m *model) loadFullFile() {
 	m.fullLines = lines
 }
 
+func (m *model) loadWorktreeFile() {
+	if len(m.files) == 0 || m.fileIdx < 0 || m.fileIdx >= len(m.files) {
+		m.fullLines = nil
+		return
+	}
+	path := m.files[m.fileIdx]
+	data, err := os.ReadFile(filepath.Join(m.root, filepath.FromSlash(path)))
+	if err != nil {
+		m.err = err
+		return
+	}
+	if bytes.Contains(data, []byte{0}) {
+		m.fullLines = []string{"Binary file: " + path}
+		return
+	}
+	m.fullLines = Highlight(path, string(data))
+}
+
 func (m *model) openSelectedImage() tea.Cmd {
-	if len(m.commits) == 0 || len(m.files) == 0 {
+	if len(m.files) == 0 {
+		return nil
+	}
+	if m.worktreeFile {
+		path := filepath.Join(m.root, filepath.FromSlash(m.files[m.fileIdx]))
+		cmd, err := imageOpenCommand(path)
+		if err != nil {
+			m.err = err
+			return nil
+		}
+		return tea.ExecProcess(cmd, func(err error) tea.Msg {
+			if err != nil {
+				return imageOpenMsg{err: fmt.Errorf("open image: %w", err)}
+			}
+			return imageOpenMsg{}
+		})
+	}
+	if len(m.commits) == 0 {
 		return nil
 	}
 	hash := m.commits[m.commitIdx].Hash
@@ -2384,24 +2473,20 @@ func (m *model) enterDirectoryEntry() {
 		m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
 		return
 	}
-	if len(entry.CommitIndexes) == 0 {
-		return
-	}
-	m.commitIdx = entry.CommitIndexes[0]
-	m.loadCommitFiles()
-	if m.err != nil {
-		return
-	}
-	hash := m.commits[m.commitIdx].Hash
-	files := m.filesForDirectoryEntry(entry, m.fileCache[hash])
-	if len(files) == 0 {
-		return
-	}
-	m.files = files
+	m.files = []string{entry.Path}
 	m.fileIdx = 0
 	m.scroll = 0
 	m.fileReturn = modeDirectories
-	m.mode = modeFiles
+	m.worktreeFile = true
+	if m.selectedFileIsImage() {
+		m.mode = modeFiles
+		return
+	}
+	m.loadWorktreeFile()
+	if m.err != nil {
+		return
+	}
+	m.mode = modeFullFile
 }
 
 func (m *model) collapseDirectoryEntry() {
@@ -2427,25 +2512,6 @@ func (m *model) collapseDirectoryEntry() {
 		}
 	}
 	m.dirIdx = clamp(m.dirIdx, 0, len(m.visibleDirectoryEntries())-1)
-}
-
-func (m model) filesForDirectoryEntry(entry directoryEntry, files []string) []string {
-	if !entry.IsDir {
-		for _, file := range files {
-			if file == entry.Path {
-				return []string{file}
-			}
-		}
-		return nil
-	}
-	prefix := entry.Path + "/"
-	var filtered []string
-	for _, file := range files {
-		if strings.HasPrefix(file, prefix) {
-			filtered = append(filtered, file)
-		}
-	}
-	return filtered
 }
 
 func (m *model) loadSelectedDiff() {
