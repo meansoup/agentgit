@@ -117,25 +117,31 @@ type directoryStats struct {
 }
 
 var (
-	hashStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	providerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	requestStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
-	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
-	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	cursorStyle    = lipgloss.NewStyle().Reverse(true)
-	titleStyle     = lipgloss.NewStyle().Bold(true)
-	contextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0"))
-	viewStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
-	commandStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7"))
-	contextLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
-	viewLabel      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
-	commandLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
-	statusAltStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
-	keyStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
-	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	hashStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	providerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	requestStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	markerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	fileStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	addLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
+	delLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
+	hunkStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	cursorStyle     = lipgloss.NewStyle().Reverse(true)
+	titleStyle      = lipgloss.NewStyle().Bold(true)
+	contextStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0"))
+	viewStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
+	commandStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7"))
+	contextLabel    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
+	viewLabel       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
+	commandLabel    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
+	statusAltStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
+	keyStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
+	mutedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	contextBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("14"))
+	panelBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("8"))
 )
 
 func Run(root string, limit int) error {
@@ -435,14 +441,15 @@ func (m model) View() string {
 }
 
 func (m model) contentView() (string, int) {
+	width := m.frameInnerWidth()
 	if m.searchOpen {
 		return "", m.searchIdx
 	}
 	switch m.mode {
 	case modeCommits:
-		return m.viewCommitsList(m.width), m.commitFocusLine()
+		return m.viewCommitsList(width), m.commitFocusLine()
 	case modeDirectories:
-		return m.viewDirectoryList(m.width), m.directoryFocusLine()
+		return m.viewDirectoryList(width), m.directoryFocusLine()
 	case modeFiles:
 		return "", m.fileFocusLine()
 	case modeDiff:
@@ -452,7 +459,7 @@ func (m model) contentView() (string, int) {
 	case modeRequest:
 		return m.viewRequestFull(), 2
 	case modeSelect:
-		return m.viewSelectList(m.width), m.commitFocusLine()
+		return m.viewSelectList(width), m.commitFocusLine()
 	default:
 		return "", 0
 	}
@@ -476,8 +483,8 @@ func (m model) viewFrame(content string, focusLine int) string {
 
 	topHeight := lipgloss.Height(staticTop)
 	headerHeight := lipgloss.Height(header)
-
-	bodyHeight := max(0, m.height-headerHeight-topHeight)
+	frameHeight := max(0, m.height-headerHeight)
+	bodyHeight := max(0, frameHeight-2-topHeight)
 	var body string
 	if m.searchOpen {
 		body = m.viewSearchBody(bodyHeight)
@@ -486,13 +493,7 @@ func (m model) viewFrame(content string, focusLine int) string {
 	} else {
 		body = m.viewBody(content, bodyHeight, focusLine)
 	}
-
-	res := header + "\n"
-	if staticTop != "" {
-		res += staticTop + "\n"
-	}
-	res += body + "\n"
-	return res
+	return header + "\n" + m.renderPanelFrame(staticTop, body, frameHeight)
 }
 
 func (m model) viewHeader() string {
@@ -500,23 +501,32 @@ func (m model) viewHeader() string {
 }
 
 func (m model) viewHeaderAtWidth(width int) string {
-	return strings.Join([]string{
-		renderHeaderRow(width, "REPOSITORY", m.repositoryContextLine(width), contextStyle, contextLabel),
-		renderHeaderRow(width, "GIT", m.gitContextLine(), contextStyle, contextLabel),
-		renderHeaderRow(width, "VIEW", m.viewContextLine(), viewStyle, viewLabel),
-		renderHeaderRow(width, "TARGET", m.targetContextLine(), viewStyle, viewLabel),
-		renderHeaderRow(width, "COMMANDS", m.commandContextLine(), commandStyle, commandLabel),
-	}, "\n")
+	if width <= 0 {
+		return strings.Join([]string{
+			"CONTEXT",
+			"path " + m.repositoryContextLine(120),
+			"git  " + m.gitContextLine(),
+			"view " + m.viewContextLine(),
+		}, "\n")
+	}
+	innerWidth := max(1, width-2)
+	rows := []string{
+		m.headerContextRow(innerWidth, "PATH", m.repositoryContextLine(width), "BRANCH", fmt.Sprintf("%s  dirty %d", emptyFallback(m.branch, "unknown"), m.dirtyFileCount())),
+		m.headerContextRow(innerWidth, "HEAD", emptyFallback(m.head, "unknown"), "VIEW", fmt.Sprintf("%s  commits %d", m.viewContextLine(), len(m.visibleCommits()))),
+		m.headerContextRow(innerWidth, "TARGET", m.targetContextLine(), "HELP", "? shortcuts  / search  ctrl+c quit"),
+	}
+	return renderContextBox(width, rows)
 }
 
 func (m model) viewSearchBody(height int) string {
 	if height <= 0 {
 		return ""
 	}
+	width := m.frameInnerWidth()
 	if len(m.searchResults) == 0 {
-		lines := []string{frameLine(mutedStyle.Render("No matching files"), m.width)}
+		lines := []string{frameLine(mutedStyle.Render("No matching files"), width)}
 		for len(lines) < height {
-			lines = append(lines, frameLine("", m.width))
+			lines = append(lines, frameLine("", width))
 		}
 		return strings.Join(lines, "\n")
 	}
@@ -532,10 +542,10 @@ func (m model) viewSearchBody(height int) string {
 		if i == m.searchIdx {
 			line = cursorStyle.Render(line)
 		}
-		lines = append(lines, frameLine(line, m.width))
+		lines = append(lines, frameLine(line, width))
 	}
 	for len(lines) < height {
-		lines = append(lines, frameLine("", m.width))
+		lines = append(lines, frameLine("", width))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -656,8 +666,60 @@ func renderHeaderRow(width int, label, content string, rowStyle, labelStyle lipg
 	return rowStyle.Width(width).Render(line)
 }
 
+func (m model) headerContextRow(width int, leftLabel, leftValue, rightLabel, rightValue string) string {
+	if width <= 0 {
+		return leftLabel + " " + leftValue + "  " + rightLabel + " " + rightValue
+	}
+	if width < 36 {
+		line := fmt.Sprintf("%s %s", leftLabel, leftValue)
+		return padPlain(truncateVisible(line, width), width)
+	}
+	gap := 3
+	leftWidth := max(10, width/2-gap/2)
+	rightWidth := max(8, width-leftWidth-gap)
+	left := formatContextCell(leftLabel, leftValue, leftWidth)
+	right := formatContextCell(rightLabel, rightValue, rightWidth)
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func renderContextBox(width int, rows []string) string {
+	if width <= 0 {
+		return strings.Join(rows, "\n")
+	}
+	innerWidth := max(1, width-2)
+	var b strings.Builder
+	b.WriteString(mutedStyle.Render("╭"))
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", innerWidth)))
+	b.WriteString(mutedStyle.Render("╮"))
+	for _, row := range rows {
+		b.WriteByte('\n')
+		b.WriteString(mutedStyle.Render("│"))
+		b.WriteString(frameLine(row, innerWidth))
+		b.WriteString(mutedStyle.Render("│"))
+	}
+	b.WriteByte('\n')
+	b.WriteString(mutedStyle.Render("╰"))
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", innerWidth)))
+	b.WriteString(mutedStyle.Render("╯"))
+	return b.String()
+}
+
+func formatContextCell(label, value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	labelWidth := min(8, max(4, len(label)))
+	prefix := contextLabel.Width(labelWidth + 2).Render(label)
+	contentWidth := max(0, width-lipgloss.Width(prefix)-1)
+	line := prefix
+	if contentWidth > 0 {
+		line += " " + truncateVisible(value, contentWidth)
+	}
+	return padPlain(truncateVisible(line, width), width)
+}
+
 func (m model) repositoryContextLine(width int) string {
-	return compactPath(m.root, max(1, width-16))
+	return compactPath(m.root, max(1, width/2-10))
 }
 
 func (m model) gitContextLine() string {
@@ -692,6 +754,92 @@ func (m model) targetContextLine() string {
 		return m.searchResults[m.searchIdx].Path
 	}
 	return m.selectionTitle()
+}
+
+func (m model) frameInnerWidth() int {
+	if m.width <= 0 {
+		return 120
+	}
+	return max(1, m.width-2)
+}
+
+func (m model) panelTitle() string {
+	if m.searchOpen {
+		return " Search "
+	}
+	switch m.mode {
+	case modeCommits:
+		return " Commit View "
+	case modeDirectories:
+		return " Directory View "
+	case modeFiles:
+		return " Files "
+	case modeDiff:
+		return " Diff View "
+	case modeFullFile:
+		return " File View "
+	case modeRequest:
+		return " Request View "
+	case modeSelect:
+		return " Select Mode "
+	default:
+		return " View "
+	}
+}
+
+func (m model) renderPanelFrame(staticTop, body string, height int) string {
+	if m.width <= 0 || height <= 0 {
+		if staticTop == "" {
+			return body
+		}
+		return staticTop + "\n" + body
+	}
+	innerWidth := max(1, m.width-2)
+	innerHeight := max(1, height-2)
+	lines := make([]string, 0, innerHeight)
+	if staticTop != "" {
+		lines = append(lines, splitViewLines(staticTop)...)
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", innerWidth)))
+	}
+	if body != "" {
+		lines = append(lines, splitViewLines(body)...)
+	}
+	if len(lines) > innerHeight {
+		lines = lines[:innerHeight]
+	}
+	for len(lines) < innerHeight {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		lines[i] = frameLine(line, innerWidth)
+	}
+	title := centerTitle(m.panelTitle(), innerWidth)
+	var b strings.Builder
+	b.WriteString(mutedStyle.Render("╭"))
+	b.WriteString(title)
+	b.WriteString(mutedStyle.Render("╮"))
+	b.WriteByte('\n')
+	for _, line := range lines {
+		b.WriteString(mutedStyle.Render("│"))
+		b.WriteString(line)
+		b.WriteString(mutedStyle.Render("│"))
+		b.WriteByte('\n')
+	}
+	b.WriteString(mutedStyle.Render("╰"))
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", innerWidth)))
+	b.WriteString(mutedStyle.Render("╯"))
+	return b.String()
+}
+
+func centerTitle(title string, width int) string {
+	title = truncateVisible(title, width)
+	titleWidth := ansi.StringWidth(ansi.Strip(title))
+	if titleWidth >= width {
+		return title
+	}
+	left := max(0, (width-titleWidth)/2)
+	right := max(0, width-titleWidth-left)
+	return mutedStyle.Render(strings.Repeat("─", left)) + titleStyle.Render(title) + mutedStyle.Render(strings.Repeat("─", right))
 }
 
 func (m model) commandContextLine() string {
@@ -835,13 +983,7 @@ func (m model) viewCommitDetailsPreview() string {
 		b.WriteString("\n")
 	}
 
-	style := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
-		Width(m.width)
-
-	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press v for full request"))
+	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press v for full request")
 }
 
 func (m model) viewFileDetailsPreview() string {
@@ -862,13 +1004,7 @@ func (m model) viewFileDetailsPreview() string {
 		b.WriteString("\n\n")
 	}
 
-	style := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
-		Width(m.width)
-
-	return style.Render(b.String())
+	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "")
 }
 
 func (m model) viewBody(content string, height int, focusLine int) string {
@@ -886,7 +1022,7 @@ func (m model) viewBody(content string, height int, focusLine int) string {
 		visible = append(visible, "")
 	}
 	for i, line := range visible {
-		visible[i] = frameLine(line, m.width)
+		visible[i] = frameLine(line, m.frameInnerWidth())
 	}
 	return strings.Join(visible, "\n")
 }
@@ -916,7 +1052,7 @@ func (m model) commitPreviewInnerHeight() int {
 
 func (m model) fitPreviewContent(content string, height int, overflow string) string {
 	lines := splitViewLines(content)
-	contentWidth := max(0, m.width-2)
+	contentWidth := max(0, m.frameInnerWidth())
 	overflowLine := mutedStyle.Render(overflow)
 	if len(lines) > height && height > 0 {
 		lines = append([]string(nil), lines[:height]...)
@@ -1695,7 +1831,7 @@ func (m model) viewRequestFull() string {
 	} else {
 		for i, req := range requests {
 			if i > 0 {
-				b.WriteString("\n" + mutedStyle.Render(strings.Repeat("─", m.width-4)) + "\n\n")
+				b.WriteString("\n" + mutedStyle.Render(strings.Repeat("─", max(1, m.frameInnerWidth()-4))) + "\n\n")
 			}
 			b.WriteString(markerStyle.Render(fmt.Sprintf("Request %d:", i+1)))
 			b.WriteString("\n")
@@ -1709,7 +1845,7 @@ func (m model) viewRequestFull() string {
 
 	lines := splitViewLines(b.String())
 	if m.wrapLines {
-		lines = hardwrapLines(lines, m.width)
+		lines = hardwrapLines(lines, m.frameInnerWidth())
 	}
 	if m.scroll >= len(lines) {
 		m.scroll = max(0, len(lines)-1)
@@ -1831,13 +1967,7 @@ func (m model) viewSelectDetailsPreview() string {
 		b.WriteString("\n")
 	}
 
-	style := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
-		Width(m.width)
-
-	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), ""))
+	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "")
 }
 
 func (m model) viewDirectoryList(width int) string {
@@ -1906,13 +2036,7 @@ func (m model) viewDirectoryDetailsPreview() string {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ...and %d more commits\n", len(entry.CommitIndexes)-count)))
 	}
 
-	style := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
-		Width(m.width)
-
-	return style.Render(m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... enter toggles folders or opens files"))
+	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... enter toggles folders or opens files")
 }
 
 func requestSummaryLine(requests []store.LinkedRequest) string {
@@ -1992,10 +2116,10 @@ func (m model) viewFilesBody(height int) string {
 		if i == m.fileIdx {
 			line = cursorStyle.Render(line)
 		}
-		lines = append(lines, frameLine(line, m.width))
+		lines = append(lines, frameLine(line, m.frameInnerWidth()))
 	}
 	for len(lines) < height {
-		lines = append(lines, frameLine("", m.width))
+		lines = append(lines, frameLine("", m.frameInnerWidth()))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2046,15 +2170,16 @@ func (m model) viewDiff() string {
 
 func (m model) renderedDiffLines() []string {
 	lines := m.visibleDiffLines()
+	width := m.frameInnerWidth()
 	if m.lineNums && m.diffMode == diffUnified {
-		return numberUnifiedDiffLines(lines, m.width, m.wrapLines)
+		return numberUnifiedDiffLines(lines, width, m.wrapLines)
 	}
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if m.wrapLines {
-			rendered = append(rendered, hardwrapLine(styleDiffLine(line, m.width), m.width)...)
+			rendered = append(rendered, hardwrapLine(styleDiffLine(line, width), width)...)
 		} else {
-			rendered = append(rendered, renderVisibleDiffLine(line, m.width, m.diffMode == diffSplit))
+			rendered = append(rendered, renderVisibleDiffLine(line, width, m.diffMode == diffSplit))
 		}
 	}
 	return rendered
@@ -2085,19 +2210,20 @@ func (m model) viewFullFile() string {
 }
 
 func (m model) renderedFullFileLines() []string {
+	width := m.frameInnerWidth()
 	numberWidth := len(fmt.Sprint(max(1, len(m.fullLines))))
 	rendered := make([]string, 0, len(m.fullLines))
 	for i, line := range m.fullLines {
 		prefix := ""
 		if m.lineNums {
 			prefix = mutedStyle.Render(fmt.Sprintf("%*d │ ", numberWidth, i+1))
-			if m.width > 0 {
-				prefix = truncateVisible(prefix, m.width)
+			if width > 0 {
+				prefix = truncateVisible(prefix, width)
 			}
 		}
-		contentWidth := m.width - lipgloss.Width(prefix)
+		contentWidth := width - lipgloss.Width(prefix)
 		if !m.wrapLines {
-			if m.width > 0 {
+			if width > 0 {
 				line = truncateVisible(line, max(1, contentWidth))
 			}
 			rendered = append(rendered, prefix+line)
@@ -2572,8 +2698,8 @@ func highlightDiff(filename string, lines []string) []string {
 func (m model) visibleDiffLines() []string {
 	if m.diffMode == diffSplit {
 		width := 120
-		if m.width > 0 {
-			width = m.width
+		if m.frameInnerWidth() > 0 {
+			width = m.frameInnerWidth()
 		}
 		return splitDiffWithLineNumbers(m.diffLines, width, m.lineNums)
 	}

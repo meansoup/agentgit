@@ -321,7 +321,7 @@ func TestHeaderShowsRepoContext(t *testing.T) {
 
 	header := ansi.Strip(m.viewHeader())
 
-	for _, want := range []string{"REPOSITORY", "GIT", "VIEW", "TARGET", "COMMANDS", "commits", "branch main", "head 69e67e5", "commits 1", "dirty 2"} {
+	for _, want := range []string{"PATH", "BRANCH", "HEAD", "VIEW", "TARGET", "HELP", "main", "69e67e5", "commits", "dirty 2"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("header missing %q:\n%s", want, header)
 		}
@@ -409,12 +409,12 @@ func TestHeaderIncludesPersistentCommands(t *testing.T) {
 
 	header := ansi.Strip(m.viewHeader())
 
-	for _, command := range []string{"[/] Search", "[?] Help"} {
+	for _, command := range []string{"? shortcuts", "/ search", "ctrl+c quit"} {
 		if !strings.Contains(header, command) {
 			t.Fatalf("header missing command %q:\n%s", command, header)
 		}
 	}
-	for _, removed := range []string{"up/down", "enter/right", "ctrl+c quit"} {
+	for _, removed := range []string{"up/down", "enter/right"} {
 		if strings.Contains(header, removed) {
 			t.Fatalf("header retained footer shortcut %q:\n%s", removed, header)
 		}
@@ -473,19 +473,14 @@ func TestHeaderSeparatesRepositoryGitViewAndTarget(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(m.viewHeader()), "\n")
 
-	for i, label := range []string{"REPOSITORY", "GIT", "VIEW", "TARGET", "COMMANDS"} {
-		if !strings.Contains(lines[i], label) {
-			t.Fatalf("header row %d missing %s: %q", i, label, lines[i])
-		}
+	if !strings.Contains(lines[1], "PATH") || !strings.Contains(lines[1], "BRANCH") {
+		t.Fatalf("top context row missing path and branch: %q", lines[1])
 	}
-	if strings.Contains(lines[0], "branch") || strings.Contains(lines[0], "selected commit") {
-		t.Fatalf("repository row contains unrelated context: %q", lines[0])
+	if !strings.Contains(lines[2], "HEAD") || !strings.Contains(lines[2], "VIEW") {
+		t.Fatalf("middle context row missing head and view: %q", lines[2])
 	}
-	if !strings.Contains(lines[1], "branch feature/header") || strings.Contains(lines[1], "selected commit") {
-		t.Fatalf("git row is not isolated: %q", lines[1])
-	}
-	if !strings.Contains(lines[3], "selected commit") {
-		t.Fatalf("target row missing selection: %q", lines[3])
+	if !strings.Contains(lines[3], "TARGET") || !strings.Contains(lines[3], "selected commit") {
+		t.Fatalf("bottom context row missing target selection: %q", lines[3])
 	}
 }
 
@@ -511,7 +506,7 @@ func TestSlashOpensFuzzyFileSearch(t *testing.T) {
 		t.Fatalf("initial search results = %d, want 3", len(got.searchResults))
 	}
 	header := ansi.Strip(got.viewHeader())
-	for _, want := range []string{"search", "query type to filter files", "[Enter] Locate", "[Esc] Close"} {
+	for _, want := range []string{"search", "query type to filter files", "TARGET", "HELP"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("search header missing %q:\n%s", want, header)
 		}
@@ -660,8 +655,8 @@ func TestRepositoryContextLineCompactsLongPath(t *testing.T) {
 
 	line := m.repositoryContextLine(48)
 
-	if width := lipgloss.Width(line); width > 32 {
-		t.Fatalf("repository context width = %d, want <= 32: %q", width, line)
+	if width := lipgloss.Width(line); width > 14 {
+		t.Fatalf("repository context width = %d, want <= 14: %q", width, line)
 	}
 	if !strings.Contains(line, "...") || !strings.Contains(line, "agentgit") {
 		t.Fatalf("repository context did not compact path usefully: %q", line)
@@ -716,8 +711,8 @@ func TestViewFilesBodyRendersOnlyVisibleWindow(t *testing.T) {
 		if !strings.Contains(line, "\x1b[K") {
 			t.Fatalf("line missing clear-to-end sequence: %q", line)
 		}
-		if width := ansi.StringWidth(ansi.Strip(line)); width != 32 {
-			t.Fatalf("line width = %d, want 32: %q", width, line)
+		if width := ansi.StringWidth(ansi.Strip(line)); width != 30 {
+			t.Fatalf("line width = %d, want 30: %q", width, line)
 		}
 	}
 }
