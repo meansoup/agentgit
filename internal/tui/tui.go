@@ -29,6 +29,7 @@ type mode int
 const (
 	modeCommits mode = iota
 	modeDirectories
+	modeRequests
 	modeFiles
 	modeDiff
 	modeFullFile
@@ -50,6 +51,7 @@ type model struct {
 	limit         int
 	commits       []git.Commit
 	links         map[string][]store.LinkedRequest
+	requests      []store.RequestSummary
 	files         []string
 	diffLines     []string
 	fullLines     []string
@@ -61,11 +63,13 @@ type model struct {
 	selected      map[string]bool
 	mode          mode
 	fileReturn    mode
+	requestReturn mode
 	worktreeFile  bool
 	diffMode      diffMode
 	pending       selectAction
 	commitIdx     int
 	dirIdx        int
+	requestIdx    int
 	fileIdx       int
 	scroll        int
 	width         int
@@ -153,6 +157,10 @@ func Run(root string, limit int) error {
 	if err != nil {
 		return err
 	}
+	requests, err := store.RequestsByRepo(root)
+	if err != nil {
+		return err
+	}
 	if !isTTY(os.Stdout) || !isTTY(os.Stdin) {
 		return PrintStatic(os.Stdout, commits, links)
 	}
@@ -163,6 +171,7 @@ func Run(root string, limit int) error {
 		limit:     limit,
 		commits:   commits,
 		links:     links,
+		requests:  requests,
 		fileCache: map[string][]string{},
 		diffCache: map[string][]string{},
 		fullCache: map[string][]string{},
@@ -450,6 +459,8 @@ func (m model) contentView() (string, int) {
 		return m.viewCommitsList(width), m.commitFocusLine()
 	case modeDirectories:
 		return m.viewDirectoryList(width), m.directoryFocusLine()
+	case modeRequests:
+		return m.viewRequestsList(width), m.requestFocusLine()
 	case modeFiles:
 		return "", m.fileFocusLine()
 	case modeDiff:
@@ -477,6 +488,8 @@ func (m model) viewFrame(content string, focusLine int) string {
 		staticTop = m.viewSelectDetailsPreview()
 	} else if m.mode == modeDirectories {
 		staticTop = m.viewDirectoryDetailsPreview()
+	} else if m.mode == modeRequests {
+		staticTop = m.viewRequestListDetailsPreview()
 	} else if m.mode == modeFiles {
 		staticTop = m.viewFileDetailsPreview()
 	}
@@ -512,7 +525,7 @@ func (m model) viewHeaderAtWidth(width int) string {
 	innerWidth := max(1, width-2)
 	rows := []string{
 		m.headerContextRow(innerWidth, "PATH", m.repositoryContextLine(width), "BRANCH", fmt.Sprintf("%s  dirty %d", emptyFallback(m.branch, "unknown"), m.dirtyFileCount())),
-		m.headerContextRow(innerWidth, "HEAD", emptyFallback(m.head, "unknown"), "VIEW", fmt.Sprintf("%s  commits %d", m.viewContextLine(), len(m.visibleCommits()))),
+		m.headerContextRow(innerWidth, "HEAD", emptyFallback(m.head, "unknown"), "VIEW", m.viewStatusLine()),
 		m.headerContextRow(innerWidth, "TARGET", m.targetContextLine(), "HELP", "? shortcuts  / search  ctrl+c quit"),
 	}
 	return renderContextBox(width, rows)
@@ -746,6 +759,14 @@ func (m model) viewContextLine() string {
 	return fmt.Sprintf("%s  diff %s%s", m.modeName(), m.diffModeName(), wrap)
 }
 
+func (m model) viewStatusLine() string {
+	label := fmt.Sprintf("commits %d", len(m.visibleCommits()))
+	if m.mode == modeRequests || (m.mode == modeRequest && m.requestReturnMode() == modeRequests) {
+		label = fmt.Sprintf("requests %d", len(m.requests))
+	}
+	return fmt.Sprintf("%s  %s", m.viewContextLine(), label)
+}
+
 func (m model) targetContextLine() string {
 	if m.searchOpen {
 		if len(m.searchResults) == 0 || m.searchIdx < 0 || m.searchIdx >= len(m.searchResults) {
@@ -772,6 +793,8 @@ func (m model) panelTitle() string {
 		return " Commit View "
 	case modeDirectories:
 		return " Directory View "
+	case modeRequests:
+		return " Request View "
 	case modeFiles:
 		return " Files "
 	case modeDiff:
@@ -870,11 +893,22 @@ func onOff(enabled bool) string {
 func (m model) selectionTitle() string {
 	switch m.mode {
 	case modeCommits, modeRequest, modeSelect:
+		if m.mode == modeRequest && m.requestReturnMode() == modeRequests {
+			if req, ok := m.selectedRequest(); ok {
+				return truncateVisible(fmt.Sprintf("%s %s", req.AgentName, requestPreviewMessage(req.Message)), 80)
+			}
+			return "no requests"
+		}
 		if len(m.commits) == 0 || m.commitIdx < 0 || m.commitIdx >= len(m.commits) {
 			return "no commits"
 		}
 		commit := m.commits[m.commitIdx]
 		return truncateVisible(commit.ShortHash+" "+commit.Subject, 80)
+	case modeRequests:
+		if req, ok := m.selectedRequest(); ok {
+			return truncateVisible(fmt.Sprintf("%s %s", req.AgentName, requestPreviewMessage(req.Message)), 80)
+		}
+		return "no requests"
 	case modeDirectories:
 		entries := m.visibleDirectoryEntries()
 		if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
@@ -894,6 +928,20 @@ func (m model) selectionTitle() string {
 	default:
 		return ""
 	}
+}
+
+func (m model) selectedRequest() (store.RequestSummary, bool) {
+	if len(m.requests) == 0 || m.requestIdx < 0 || m.requestIdx >= len(m.requests) {
+		return store.RequestSummary{}, false
+	}
+	return m.requests[m.requestIdx], true
+}
+
+func (m model) requestReturnMode() mode {
+	if m.requestReturn == 0 && m.mode == modeRequest && len(m.requests) == 0 {
+		return modeCommits
+	}
+	return m.requestReturn
 }
 
 func (m model) visibleCommits() []git.Commit {
@@ -1168,8 +1216,16 @@ func (m model) helpEntries() []helpEntry {
 			{"up/down", "Move cursor", "select a directory or file path"},
 			{"enter/right", "Toggle/open", "toggle folders or open the selected file path"},
 			{"left", "Collapse", "collapse the selected depth to its parent folder"},
-			{"tab", "Commits", "switch back to commit list"},
+			{"tab", "Requests", "switch to request list"},
 			{"r", "Refresh", "reload commits and request links"},
+			{"ctrl+c", "Quit", "exit agentgit"},
+		}, entries...)
+	case modeRequests:
+		return append([]helpEntry{
+			{"up/down", "Move cursor", "select a request"},
+			{"enter/right", "Open request", "show the full request body"},
+			{"tab", "Commits", "switch back to commit list"},
+			{"r", "Refresh", "reload request links"},
 			{"ctrl+c", "Quit", "exit agentgit"},
 		}, entries...)
 	case modeFiles:
@@ -1227,12 +1283,20 @@ func (m model) helpEntries() []helpEntry {
 		}
 		return append(fullEntries, entries...)
 	case modeRequest:
+		backAction := "return to file list"
+		shortcut := "left/backspace"
+		if m.mode == modeRequest && m.requestReturnMode() == modeCommits {
+			backAction = "return to commit list"
+			shortcut = "v/left/backspace"
+		} else if m.requestReturnMode() == modeRequests {
+			backAction = "return to request list"
+		}
 		return append([]helpEntry{
 			{"up/down", "Scroll", "move through request text"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"w", "Wrap lines", "show complete long request lines"},
-			{"v", "Back", "return to commit list"},
-			{"left/backspace", "Back", "return to file list"},
+			{"v", "Back", backAction},
+			{shortcut, "Back", backAction},
 			{"r", "Refresh", "reload request links"},
 		}, entries...)
 	default:
@@ -1250,6 +1314,8 @@ func (m *model) move(delta int) {
 		m.pending = selectActionNone
 	case modeDirectories:
 		m.dirIdx = clamp(m.dirIdx+delta, 0, len(m.visibleDirectoryEntries())-1)
+	case modeRequests:
+		m.requestIdx = clamp(m.requestIdx+delta, 0, len(m.requests)-1)
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
 	case modeDiff, modeFullFile, modeRequest:
@@ -1325,6 +1391,13 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		m.toggleSelectedCommit()
 	case modeDirectories:
 		m.enterDirectoryEntry()
+	case modeRequests:
+		if len(m.requests) == 0 {
+			return nil
+		}
+		m.requestReturn = modeRequests
+		m.scroll = 0
+		m.mode = modeRequest
 	case modeFiles:
 		if len(m.files) == 0 {
 			return nil
@@ -1359,8 +1432,17 @@ func (m *model) back() {
 		} else {
 			m.mode = modeFiles
 		}
-	case modeDiff, modeRequest:
+	case modeDiff:
 		m.mode = modeFiles
+	case modeRequest:
+		switch m.requestReturn {
+		case modeRequests:
+			m.mode = modeRequests
+		case modeCommits:
+			m.mode = modeCommits
+		default:
+			m.mode = modeFiles
+		}
 	case modeFiles:
 		if m.fileReturn == modeDirectories {
 			m.mode = modeDirectories
@@ -1378,20 +1460,24 @@ func (m *model) toggleTopLevelView() {
 	if m.mode == modeSelect {
 		return
 	}
-	if m.mode == modeDirectories {
+	switch m.mode {
+	case modeCommits:
+		m.loadDirectoryEntries()
+		if m.err != nil {
+			return
+		}
+		if !(m.mode == modeFiles && m.fileReturn == modeDirectories) {
+			m.expanded = map[string]bool{}
+		}
+		m.expandCurrentDirectoryPath()
+		m.mode = modeDirectories
+	case modeDirectories:
+		m.mode = modeRequests
+	case modeRequests:
 		m.mode = modeCommits
-		m.scroll = 0
-		return
+	default:
+		m.mode = modeCommits
 	}
-	m.loadDirectoryEntries()
-	if m.err != nil {
-		return
-	}
-	if m.mode != modeDirectories && !(m.mode == modeFiles && m.fileReturn == modeDirectories) {
-		m.expanded = map[string]bool{}
-	}
-	m.expandCurrentDirectoryPath()
-	m.mode = modeDirectories
 	m.scroll = 0
 }
 
@@ -1409,6 +1495,10 @@ func (m *model) refresh() {
 	if len(m.files) > 0 && m.fileIdx >= 0 && m.fileIdx < len(m.files) {
 		selectedFile = m.files[m.fileIdx]
 	}
+	selectedRequestID := int64(0)
+	if len(m.requests) > 0 && m.requestIdx >= 0 && m.requestIdx < len(m.requests) {
+		selectedRequestID = m.requests[m.requestIdx].ID
+	}
 	directoryContext := m.mode == modeDirectories ||
 		((m.mode == modeFiles || m.mode == modeFullFile) && m.fileReturn == modeDirectories)
 
@@ -1422,10 +1512,16 @@ func (m *model) refresh() {
 		m.err = err
 		return
 	}
+	requests, err := store.RequestsByRepo(m.root)
+	if err != nil {
+		m.err = err
+		return
+	}
 	m.branch = git.Branch(m.root)
 	m.head = git.ShortHead(m.root)
 	m.commits = commits
 	m.links = links
+	m.requests = requests
 	m.fileCache = map[string][]string{}
 	m.diffCache = map[string][]string{}
 	m.fullCache = map[string][]string{}
@@ -1448,6 +1544,13 @@ func (m *model) refresh() {
 		}
 	}
 	m.loadCommitFiles()
+	m.requestIdx = 0
+	for i, req := range m.requests {
+		if req.ID == selectedRequestID {
+			m.requestIdx = i
+			break
+		}
+	}
 	if directoryContext {
 		m.loadDirectoryEntries()
 		m.dirIdx = 0
@@ -1467,7 +1570,7 @@ func (m *model) refresh() {
 	if m.worktreeFile {
 		m.files = []string{selectedFile}
 		m.fileIdx = 0
-	} else if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest && m.mode != modeSelect {
+	} else if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequests && m.mode != modeRequest && m.mode != modeSelect {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		for i, file := range m.files {
@@ -1494,10 +1597,20 @@ func (m *model) refresh() {
 
 func (m *model) toggleRequestFull() {
 	if m.mode == modeCommits {
+		m.requestReturn = modeCommits
+		m.mode = modeRequest
+		m.scroll = 0
+	} else if m.mode == modeRequests && len(m.requests) > 0 {
+		m.requestReturn = modeRequests
 		m.mode = modeRequest
 		m.scroll = 0
 	} else if m.mode == modeRequest {
-		m.mode = modeCommits
+		switch m.requestReturn {
+		case modeRequests:
+			m.mode = modeRequests
+		default:
+			m.mode = modeCommits
+		}
 		m.scroll = 0
 	}
 }
@@ -1814,32 +1927,57 @@ func removeNotice(commitCount int, removedUncommitted bool) string {
 }
 
 func (m model) viewRequestFull() string {
-	if len(m.commits) == 0 {
-		return ""
-	}
-	commit := m.commits[m.commitIdx]
 	var b strings.Builder
-
-	b.WriteString(titleStyle.Render("Full Request Details"))
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
-	b.WriteString("\n\n")
-
-	requests := m.links[commit.Hash]
-	if len(requests) == 0 {
-		b.WriteString(mutedStyle.Render("No requests found for this commit."))
-	} else {
-		for i, req := range requests {
-			if i > 0 {
-				b.WriteString("\n" + mutedStyle.Render(strings.Repeat("─", max(1, m.frameInnerWidth()-4))) + "\n\n")
+	if m.requestReturnMode() == modeRequests {
+		req, ok := m.selectedRequest()
+		if !ok {
+			return ""
+		}
+		b.WriteString(titleStyle.Render("Full Request Details"))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%s  %s  id %d", providerStyle.Render(req.AgentName), providerStyle.Render(req.Model), req.ID))
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render(req.StartedAt))
+		b.WriteString("\n\n")
+		if len(req.CommitRefs) == 0 {
+			b.WriteString(mutedStyle.Render("No linked commits"))
+		} else {
+			b.WriteString(mutedStyle.Render("Linked commits"))
+			b.WriteString("\n")
+			for _, hash := range req.CommitRefs {
+				b.WriteString("  ")
+				b.WriteString(hashStyle.Render(hash))
+				b.WriteByte('\n')
 			}
-			b.WriteString(markerStyle.Render(fmt.Sprintf("Request %d:", i+1)))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("  %s: %s\n", mutedStyle.Render("Agent"), providerStyle.Render(req.AgentName)))
-			b.WriteString(fmt.Sprintf("  %s: %s\n", mutedStyle.Render("Model"), providerStyle.Render(req.Model)))
-			b.WriteString("\n")
-			b.WriteString(requestStyle.Render(req.Message))
-			b.WriteString("\n")
+			b.WriteByte('\n')
+		}
+		b.WriteString(requestStyle.Render(req.Message))
+	} else {
+		if len(m.commits) == 0 {
+			return ""
+		}
+		commit := m.commits[m.commitIdx]
+		b.WriteString(titleStyle.Render("Full Request Details"))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
+		b.WriteString("\n\n")
+
+		requests := m.links[commit.Hash]
+		if len(requests) == 0 {
+			b.WriteString(mutedStyle.Render("No requests found for this commit."))
+		} else {
+			for i, req := range requests {
+				if i > 0 {
+					b.WriteString("\n" + mutedStyle.Render(strings.Repeat("─", max(1, m.frameInnerWidth()-4))) + "\n\n")
+				}
+				b.WriteString(markerStyle.Render(fmt.Sprintf("Request %d:", i+1)))
+				b.WriteString("\n")
+				b.WriteString(fmt.Sprintf("  %s: %s\n", mutedStyle.Render("Agent"), providerStyle.Render(req.AgentName)))
+				b.WriteString(fmt.Sprintf("  %s: %s\n", mutedStyle.Render("Model"), providerStyle.Render(req.Model)))
+				b.WriteString("\n")
+				b.WriteString(requestStyle.Render(req.Message))
+				b.WriteString("\n")
+			}
 		}
 	}
 
@@ -1882,6 +2020,10 @@ func (m model) commitFocusLine() int {
 
 func (m model) directoryFocusLine() int {
 	return m.dirIdx
+}
+
+func (m model) requestFocusLine() int {
+	return m.requestIdx
 }
 
 func (m model) fileFocusLine() int {
@@ -1931,6 +2073,70 @@ func (m model) viewSelectList(width int) string {
 		}
 	}
 	return b.String()
+}
+
+func (m model) viewRequestsList(width int) string {
+	if len(m.requests) == 0 {
+		return mutedStyle.Render("no requests")
+	}
+	var b strings.Builder
+	for i, req := range m.requests {
+		summary := fmt.Sprintf("[%s %s] %s", req.AgentName, req.Model, requestPreviewMessage(req.Message))
+		line := truncateVisible(summary, width)
+		if i == m.requestIdx {
+			line = cursorStyle.Render(line)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+		commitInfo := "no linked commits"
+		if len(req.CommitRefs) > 0 {
+			var refs []string
+			for _, hash := range req.CommitRefs {
+				refs = append(refs, shortHash(hash))
+			}
+			commitInfo = strings.Join(refs, ", ")
+		}
+		meta := mutedStyle.Render(req.StartedAt)
+		if commitInfo != "" {
+			meta += mutedStyle.Render("  commits ") + hashStyle.Render(commitInfo)
+		}
+		b.WriteString(truncateVisible(meta, width))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func (m model) viewRequestListDetailsPreview() string {
+	req, ok := m.selectedRequest()
+	if !ok {
+		return mutedStyle.Render("no requests")
+	}
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Request Details"))
+	b.WriteByte('\n')
+	b.WriteString(providerStyle.Render(req.AgentName))
+	b.WriteString(" ")
+	b.WriteString(providerStyle.Render(req.Model))
+	b.WriteString(mutedStyle.Render("  " + req.StartedAt))
+	b.WriteString("\n\n")
+	b.WriteString(requestStyle.Render(requestPreviewMessage(req.Message)))
+	b.WriteString("\n\n")
+	if len(req.CommitRefs) == 0 {
+		b.WriteString(mutedStyle.Render("No linked commits"))
+		return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... enter opens full request")
+	}
+	b.WriteString(mutedStyle.Render("Linked commits"))
+	b.WriteByte('\n')
+	for i, hash := range req.CommitRefs {
+		if i >= 4 {
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("  ...and %d more", len(req.CommitRefs)-i)))
+			break
+		}
+		b.WriteString("  ")
+		b.WriteString(hashStyle.Render(shortHash(hash)))
+		b.WriteByte('\n')
+	}
+	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... enter opens full request")
 }
 
 func (m model) viewSelectDetailsPreview() string {
@@ -3082,6 +3288,8 @@ func (m model) modeName() string {
 	switch m.mode {
 	case modeDirectories:
 		return "directories"
+	case modeRequests:
+		return "requests"
 	case modeFiles:
 		return "files"
 	case modeDiff:

@@ -63,6 +63,15 @@ type LinkedRequest struct {
 	Message   string
 }
 
+type RequestSummary struct {
+	ID         int64
+	AgentName  string
+	Model      string
+	Message    string
+	StartedAt  string
+	CommitRefs []string
+}
+
 func DefaultDBPath() string {
 	if override := os.Getenv("AGENTGIT_DB"); override != "" {
 		abs, err := filepath.Abs(expandHome(override))
@@ -462,6 +471,69 @@ func RequestsByCommit(repoRoot string) (map[string][]LinkedRequest, error) {
 		result[commitHash] = append(result[commitHash], req)
 	}
 	return result, rows.Err()
+}
+
+func RequestsByRepo(repoRoot string) ([]RequestSummary, error) {
+	if _, err := Init(); err != nil {
+		return nil, err
+	}
+	db, err := Open()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query(
+		`SELECT ar.id,
+		        COALESCE(ar.agent_name, ar.provider),
+		        ar.model,
+		        ar.message,
+		        ar.started_at,
+		        COALESCE(rc.commit_hash, '')
+		 FROM agent_requests ar
+		 LEFT JOIN request_commits rc
+		   ON rc.request_id = ar.id AND rc.repo_root = ar.repo_root
+		 WHERE ar.repo_root = ?
+		 ORDER BY ar.started_at DESC, ar.id DESC, rc.linked_at ASC, rc.commit_hash ASC`,
+		repoRoot,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []RequestSummary
+	indexByID := map[int64]int{}
+	for rows.Next() {
+		var (
+			id        int64
+			agentName string
+			model     string
+			message   string
+			startedAt string
+			commitRef string
+		)
+		if err := rows.Scan(&id, &agentName, &model, &message, &startedAt, &commitRef); err != nil {
+			return nil, err
+		}
+		index, ok := indexByID[id]
+		if !ok {
+			index = len(result)
+			indexByID[id] = index
+			result = append(result, RequestSummary{
+				ID:        id,
+				AgentName: agentName,
+				Model:     model,
+				Message:   message,
+				StartedAt: startedAt,
+			})
+		}
+		if strings.TrimSpace(commitRef) != "" {
+			result[index].CommitRefs = append(result[index].CommitRefs, commitRef)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func isDuplicateColumnError(err error) bool {

@@ -426,6 +426,7 @@ func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
 		for _, mode := range []mode{
 			modeCommits,
 			modeDirectories,
+			modeRequests,
 			modeFiles,
 			modeDiff,
 			modeFullFile,
@@ -595,6 +596,64 @@ func TestSearchEscapeReturnsToPreviousView(t *testing.T) {
 	}
 	if got.mode != modeDiff {
 		t.Fatalf("mode = %v, want previous modeDiff", got.mode)
+	}
+}
+
+func TestTabCyclesTopLevelViewsIncludingRequests(t *testing.T) {
+	m := model{
+		root:   newTUITestRepo(t),
+		mode:   modeCommits,
+		width:  100,
+		height: 24,
+		requests: []store.RequestSummary{
+			{ID: 1, AgentName: "codex", Model: "gpt-5", Message: "one"},
+		},
+	}
+	writeTUITestFile(t, m.root, "internal/tui/tui.go", "package tui\n")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got := updated.(model)
+	if got.mode != modeDirectories {
+		t.Fatalf("first tab mode = %v, want modeDirectories", got.mode)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(model)
+	if got.mode != modeRequests {
+		t.Fatalf("second tab mode = %v, want modeRequests", got.mode)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(model)
+	if got.mode != modeCommits {
+		t.Fatalf("third tab mode = %v, want modeCommits", got.mode)
+	}
+}
+
+func TestRequestListEnterOpensFullRequest(t *testing.T) {
+	m := model{
+		mode: modeRequests,
+		requests: []store.RequestSummary{
+			{ID: 7, AgentName: "claude", Model: "sonnet", Message: "full request body", StartedAt: "2026-06-25T00:00:00Z", CommitRefs: []string{"abc123"}},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+
+	if got.mode != modeRequest {
+		t.Fatalf("mode = %v, want modeRequest", got.mode)
+	}
+	if got.requestReturn != modeRequests {
+		t.Fatalf("requestReturn = %v, want modeRequests", got.requestReturn)
+	}
+	view := ansi.Strip(got.viewRequestFull())
+	for _, want := range []string{"claude", "sonnet", "abc123", "full request body"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("request full view missing %q:\n%s", want, view)
+		}
 	}
 }
 
@@ -955,9 +1014,12 @@ func TestLeftFromFileCollapsesAndSelectsParentDirectory(t *testing.T) {
 	}
 }
 
-func TestTabTogglesBetweenCommitAndDirectoryViews(t *testing.T) {
+func TestTabCyclesBetweenCommitDirectoryAndRequestViews(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "c1", ShortHash: "c1", Subject: "change"}},
+		requests: []store.RequestSummary{
+			{ID: 1, AgentName: "codex", Model: "gpt-5", Message: "request"},
+		},
 		fileCache: map[string][]string{
 			"c1": {"internal/tui/tui.go"},
 		},
@@ -972,8 +1034,14 @@ func TestTabTogglesBetweenCommitAndDirectoryViews(t *testing.T) {
 
 	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got = updated.(model)
+	if got.mode != modeRequests {
+		t.Fatalf("mode after second tab = %v, want modeRequests", got.mode)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(model)
 	if got.mode != modeCommits {
-		t.Fatalf("mode after second tab = %v, want modeCommits", got.mode)
+		t.Fatalf("mode after third tab = %v, want modeCommits", got.mode)
 	}
 }
 

@@ -147,3 +147,44 @@ func TestDeleteCommitLinksRemovesOnlySelectedHashes(t *testing.T) {
 		t.Fatalf("kept hash links = %+v, want 1", links["keep"])
 	}
 }
+
+func TestRequestsByRepoKeepsLatestOrderAndCommitRefs(t *testing.T) {
+	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
+
+	oldID, err := CreateRequest("codex", "codex", "gpt-5", "older", "/repo", "session-1", "turn-1", "head", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishRequest(oldID); err != nil {
+		t.Fatal(err)
+	}
+	newID, err := CreateRequest("claude", "claude", "sonnet", "newer", "/repo", "session-2", "turn-2", "head", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkCommit(oldID, "abc111", "/repo"); err != nil {
+		t.Fatal(err)
+	}
+	for _, hash := range []string{"def222", "ghi333"} {
+		if err := LinkCommit(newID, hash, "/repo"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := RequestsByRepo("/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("RequestsByRepo len = %d, want 2", len(got))
+	}
+	if got[0].ID != newID || got[0].AgentName != "claude" || got[0].Message != "newer" {
+		t.Fatalf("latest request = %+v, want newer claude request", got[0])
+	}
+	if len(got[0].CommitRefs) != 2 || got[0].CommitRefs[0] != "def222" || got[0].CommitRefs[1] != "ghi333" {
+		t.Fatalf("latest commit refs = %+v, want def222 ghi333", got[0].CommitRefs)
+	}
+	if got[1].ID != oldID || len(got[1].CommitRefs) != 1 || got[1].CommitRefs[0] != "abc111" {
+		t.Fatalf("older request = %+v, want one abc111 ref", got[1])
+	}
+}
