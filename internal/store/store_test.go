@@ -188,3 +188,29 @@ func TestRequestsByRepoKeepsLatestOrderAndCommitRefs(t *testing.T) {
 		t.Fatalf("older request = %+v, want one abc111 ref", got[1])
 	}
 }
+
+func TestRequestsByRepoExcludesRequestsWithoutLinkedCommits(t *testing.T) {
+	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
+
+	linkedID, err := CreateRequest("codex", "codex", "gpt-5", "linked", "/repo", "session-1", "turn-1", "head", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateRequest("claude", "claude", "sonnet", "unlinked", "/repo", "session-2", "turn-2", "head", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkCommit(linkedID, "abc111", "/repo"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RequestsByRepo("/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("RequestsByRepo len = %d, want 1", len(got))
+	}
+	if got[0].ID != linkedID || got[0].Message != "linked" {
+		t.Fatalf("RequestsByRepo[0] = %+v, want linked request", got[0])
+	}
+}

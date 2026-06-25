@@ -657,6 +657,32 @@ func TestRequestListEnterOpensFullRequest(t *testing.T) {
 	}
 }
 
+func TestRequestListRendersBulletTimeAgentRequestAndShortCommitHashes(t *testing.T) {
+	m := model{
+		mode: modeRequests,
+		requests: []store.RequestSummary{
+			{
+				ID:         7,
+				AgentName:  "claude",
+				Model:      "sonnet",
+				Message:    "full request body",
+				StartedAt:  "2026-06-25T13:14:15Z",
+				CommitRefs: []string{"1234567890abcdef", "abcdef1234567890"},
+			},
+		},
+		width: 120,
+	}
+
+	view := ansi.Strip(m.viewRequestsList(120))
+
+	if !strings.Contains(view, "● 06-25 13:14 [claude sonnet] full request body (12345678, abcdef12)") {
+		t.Fatalf("request list row missing expected format:\n%s", view)
+	}
+	if strings.Contains(view, "1234567890ab") || strings.Contains(view, "abcdef123456") {
+		t.Fatalf("request list row retained long commit hashes:\n%s", view)
+	}
+}
+
 func TestSearchBodyRendersOnlyVisibleResults(t *testing.T) {
 	results := make([]fileSearchResult, 1000)
 	for i := range results {

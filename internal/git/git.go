@@ -76,10 +76,10 @@ func ShortHead(root string) string {
 	if err != nil {
 		return "none"
 	}
-	if len(head) <= 12 {
+	if len(head) <= 8 {
 		return head
 	}
-	return head[:12]
+	return head[:8]
 }
 
 func Parent(root string, commitHash string) (string, error) {
@@ -177,7 +177,7 @@ func IsWorkingTreeClean(root string) (bool, error) {
 
 func Commits(root string, limit int) ([]Commit, error) {
 	format := "%H%x1f%h%x1f%ad%x1f%s"
-	out, err := Run(root, "log", fmt.Sprintf("--max-count=%d", limit), "--date=format:%m-%d %H:%M", "--pretty=format:"+format)
+	out, err := Run(root, "log", fmt.Sprintf("--max-count=%d", limit), "--abbrev=8", "--date=format:%m-%d %H:%M", "--pretty=format:"+format)
 	if err != nil {
 		return nil, err
 	}

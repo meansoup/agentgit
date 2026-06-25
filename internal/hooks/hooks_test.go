@@ -60,7 +60,7 @@ func TestInstallClaudeSettingsHooksPreservesSettingsAndIsIdempotent(t *testing.T
 	}
 }
 
-func TestHandleClaudeAutoCommitsAndLinksRequest(t *testing.T) {
+func TestHandleClaudeStopFinishesRequestWithoutCreatingCommit(t *testing.T) {
 	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
 	root := newHookTestRepo(t)
 	writeHookTestFile(t, root, "base.txt", "base\n")
@@ -88,23 +88,15 @@ func TestHandleClaudeAutoCommitsAndLinksRequest(t *testing.T) {
 
 	if status, err := git.StatusPaths(root); err != nil {
 		t.Fatal(err)
-	} else if len(status) != 0 {
-		t.Fatalf("status after Claude auto commit = %+v, want clean", status)
-	}
-	if subject := strings.TrimSpace(git.RunAllowError(root, "log", "-1", "--pretty=%s")); subject != "agentgit: Add Claude support" {
-		t.Fatalf("latest commit subject = %q", subject)
-	}
-	hash, err := git.Head(root)
-	if err != nil {
-		t.Fatal(err)
+	} else if !status["claude.txt"] {
+		t.Fatalf("status after Claude stop = %+v, want claude.txt to remain uncommitted", status)
 	}
 	links, err := store.RequestsByCommit(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := links[hash]
-	if len(got) != 1 || got[0].AgentName != "claude" || got[0].Model != "claude" {
-		t.Fatalf("Claude request links = %+v", got)
+	if len(links) != 0 {
+		t.Fatalf("Claude stop created commit links unexpectedly: %+v", links)
 	}
 	if _, ok, err := store.FindActiveRequestBySession(root, "claude-session"); err != nil {
 		t.Fatal(err)
@@ -184,7 +176,7 @@ func TestHandlePostCommitWithoutSessionSkipsAmbiguousActiveRequests(t *testing.T
 	}
 }
 
-func TestHandleCodexStopAutoCommitsRequestChanges(t *testing.T) {
+func TestHandleCodexStopFinishesRequestWithoutCreatingCommit(t *testing.T) {
 	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
 	root := newHookTestRepo(t)
 	writeHookTestFile(t, root, "base.txt", "base\n")
@@ -204,67 +196,23 @@ func TestHandleCodexStopAutoCommitsRequestChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status) != 0 {
-		t.Fatalf("status after auto commit = %+v, want clean", status)
-	}
-	subject := strings.TrimSpace(git.RunAllowError(root, "log", "-1", "--pretty=%s"))
-	if subject != "agentgit: Add feature" {
-		t.Fatalf("latest commit subject = %q, want auto commit subject", subject)
-	}
-	hash, err := git.Head(root)
-	if err != nil {
-		t.Fatal(err)
+	if !status["feature.txt"] {
+		t.Fatalf("status after stop = %+v, want feature.txt to remain uncommitted", status)
 	}
 	links, err := store.RequestsByCommit(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := links[hash]; len(got) != 1 || got[0].RequestID != reqID {
-		t.Fatalf("auto commit links = %+v, want request %d", got, reqID)
+	if len(links) != 0 {
+		t.Fatalf("stop created commit links unexpectedly: %+v", links)
 	}
 	if _, ok, err := store.FindActiveRequestBySession(root, "session"); err != nil {
 		t.Fatal(err)
 	} else if ok {
-		t.Fatal("request remained active after auto commit")
+		t.Fatal("request remained active after stop")
 	}
-}
-
-func TestHandleCodexStopSkipsAutoCommitWhenBaselineWasDirty(t *testing.T) {
-	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
-	root := newHookTestRepo(t)
-	writeHookTestFile(t, root, "base.txt", "base\n")
-	runHookTestGit(t, root, "add", "base.txt")
-	runHookTestGit(t, root, "commit", "-m", "base")
-	if _, err := store.CreateRequest("codex", "codex", "gpt", "Change dirty file", root, "session", "turn", "head", map[string]bool{"dirty.txt": true}); err != nil {
-		t.Fatal(err)
-	}
-	writeHookTestFile(t, root, "dirty.txt", "dirty\n")
-
-	if err := handleCodexStop(codexHookInput{SessionID: "session", TurnID: "turn"}, root); err != nil {
-		t.Fatal(err)
-	}
-
-	status, err := git.StatusPaths(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !status["dirty.txt"] {
-		t.Fatalf("dirty baseline file was committed unexpectedly; status = %+v", status)
-	}
-	count := strings.TrimSpace(git.RunAllowError(root, "rev-list", "--count", "HEAD"))
-	if count != "1" {
-		t.Fatalf("commit count = %q, want original commit only", count)
-	}
-	hash, err := git.Head(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	links, err := store.RequestsByCommit(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(links[hash]) != 0 {
-		t.Fatalf("baseline-dirty request was linked to a commit: %+v", links[hash])
+	if reqID <= 0 {
+		t.Fatalf("request id = %d, want positive", reqID)
 	}
 }
 

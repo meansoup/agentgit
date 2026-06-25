@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -2081,26 +2082,19 @@ func (m model) viewRequestsList(width int) string {
 	}
 	var b strings.Builder
 	for i, req := range m.requests {
-		summary := fmt.Sprintf("[%s %s] %s", req.AgentName, req.Model, requestPreviewMessage(req.Message))
+		summary := fmt.Sprintf("● %s [%s %s] %s", formatRequestStartedAt(req.StartedAt), req.AgentName, req.Model, requestPreviewMessage(req.Message))
+		if len(req.CommitRefs) > 0 {
+			refs := make([]string, 0, len(req.CommitRefs))
+			for _, hash := range req.CommitRefs {
+				refs = append(refs, shortHash(hash))
+			}
+			summary += fmt.Sprintf(" (%s)", strings.Join(refs, ", "))
+		}
 		line := truncateVisible(summary, width)
 		if i == m.requestIdx {
 			line = cursorStyle.Render(line)
 		}
 		b.WriteString(line)
-		b.WriteByte('\n')
-		commitInfo := "no linked commits"
-		if len(req.CommitRefs) > 0 {
-			var refs []string
-			for _, hash := range req.CommitRefs {
-				refs = append(refs, shortHash(hash))
-			}
-			commitInfo = strings.Join(refs, ", ")
-		}
-		meta := mutedStyle.Render(req.StartedAt)
-		if commitInfo != "" {
-			meta += mutedStyle.Render("  commits ") + hashStyle.Render(commitInfo)
-		}
-		b.WriteString(truncateVisible(meta, width))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -2117,7 +2111,7 @@ func (m model) viewRequestListDetailsPreview() string {
 	b.WriteString(providerStyle.Render(req.AgentName))
 	b.WriteString(" ")
 	b.WriteString(providerStyle.Render(req.Model))
-	b.WriteString(mutedStyle.Render("  " + req.StartedAt))
+	b.WriteString(mutedStyle.Render("  " + formatRequestStartedAt(req.StartedAt)))
 	b.WriteString("\n\n")
 	b.WriteString(requestStyle.Render(requestPreviewMessage(req.Message)))
 	b.WriteString("\n\n")
@@ -2558,10 +2552,18 @@ func imageOpenCommand(path string) (*exec.Cmd, error) {
 }
 
 func shortHash(hash string) string {
-	if len(hash) <= 12 {
+	if len(hash) <= 8 {
 		return hash
 	}
-	return hash[:12]
+	return hash[:8]
+}
+
+func formatRequestStartedAt(startedAt string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, startedAt)
+	if err != nil {
+		return startedAt
+	}
+	return parsed.Format("01-02 15:04")
 }
 
 func (m *model) loadCommitFiles() {
