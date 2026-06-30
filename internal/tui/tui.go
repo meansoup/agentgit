@@ -453,9 +453,6 @@ func (m model) View() string {
 
 func (m model) contentView() (string, int) {
 	width := m.frameInnerWidth()
-	if m.searchOpen {
-		return "", m.searchIdx
-	}
 	switch m.mode {
 	case modeCommits:
 		return m.viewCommitsList(width), m.commitFocusLine()
@@ -482,9 +479,7 @@ func (m model) viewFrame(content string, focusLine int) string {
 	header := m.viewHeader()
 
 	var staticTop string
-	if m.searchOpen {
-		staticTop = ""
-	} else if m.mode == modeCommits {
+	if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
 	} else if m.mode == modeSelect {
 		staticTop = m.viewSelectDetailsPreview()
@@ -537,32 +532,60 @@ func (m model) viewSearchBody(height int) string {
 	if height <= 0 {
 		return ""
 	}
-	width := m.frameInnerWidth()
+	width := clamp(m.frameInnerWidth()-8, 32, 88)
+	if width > m.frameInnerWidth() {
+		width = m.frameInnerWidth()
+	}
+	dialogHeight := clamp(height-2, 5, 12)
+	dialog := m.viewSearchDialog(width, dialogHeight)
+	return lipgloss.Place(m.frameInnerWidth(), height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+func (m model) viewSearchDialog(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	innerWidth := max(1, width-4)
+	rows := []string{
+		truncateVisible("/ "+emptyFallback(m.searchText, ""), innerWidth),
+		mutedStyle.Render(truncateVisible(fmt.Sprintf("matches %d", len(m.searchResults)), innerWidth)),
+		mutedStyle.Render(strings.Repeat("─", innerWidth)),
+	}
+	listHeight := max(1, height-len(rows)-2)
 	if len(m.searchResults) == 0 {
-		lines := []string{frameLine(mutedStyle.Render("No matching files"), width)}
-		for len(lines) < height {
-			lines = append(lines, frameLine("", width))
+		rows = append(rows, mutedStyle.Render("No matching files"))
+		for len(rows) < height {
+			rows = append(rows, "")
 		}
-		return strings.Join(lines, "\n")
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("13")).
+			Padding(0, 1).
+			Width(width).
+			Render(strings.Join(rows, "\n"))
 	}
 	start := 0
-	if len(m.searchResults) > height {
-		start = clamp(m.searchIdx-height/2, 0, len(m.searchResults)-height)
+	if len(m.searchResults) > listHeight {
+		start = clamp(m.searchIdx-listHeight/2, 0, len(m.searchResults)-listHeight)
 	}
-	end := min(len(m.searchResults), start+height)
-	lines := make([]string, 0, height)
+	end := min(len(m.searchResults), start+listHeight)
 	for i := start; i < end; i++ {
 		result := m.searchResults[i]
 		line := renderFuzzyPath(result)
 		if i == m.searchIdx {
 			line = cursorStyle.Render(line)
 		}
-		lines = append(lines, frameLine(line, width))
+		rows = append(rows, truncateVisible(line, innerWidth))
 	}
-	for len(lines) < height {
-		lines = append(lines, frameLine("", width))
+	for len(rows) < height {
+		rows = append(rows, "")
 	}
-	return strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("13")).
+		Padding(0, 1).
+		Width(width).
+		Render(strings.Join(rows, "\n"))
 }
 
 func fuzzyFileMatches(files []string, query string) []fileSearchResult {

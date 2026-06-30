@@ -804,6 +804,29 @@ func TestSearchBodyRendersOnlyVisibleResults(t *testing.T) {
 	}
 }
 
+func TestSearchViewShowsCenteredDialogWithinFrame(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
+	writeTUITestFile(t, root, "internal/hooks/hooks.go", "package hooks\n")
+	m := model{
+		root:   root,
+		mode:   modeCommits,
+		width:  80,
+		height: 20,
+	}
+	m.openSearch()
+	m.searchText = "tui"
+	m.updateSearchResults()
+
+	view := ansi.Strip(m.View())
+
+	for _, want := range []string{"PATH", "VIEW", "/ tui", "matches", "internal/tui/tui.go"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("search view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestFrameUsesFormerFooterRowForContent(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
