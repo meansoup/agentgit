@@ -303,7 +303,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lineNums = !m.lineNums
 			}
 		case "w":
-			if m.mode == modeDiff || m.mode == modeFullFile || m.mode == modeRequest {
+			if m.mode == modeCommits || m.mode == modeRequests || m.mode == modeRequest || m.mode == modeDiff || m.mode == modeFullFile || m.mode == modeSelect {
 				m.wrapLines = !m.wrapLines
 				m.scroll = 0
 				if m.wrapLines && m.mode == modeDiff {
@@ -871,6 +871,8 @@ func (m model) commandContextLine() string {
 		return "[Enter] Locate  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
 	}
 	switch m.mode {
+	case modeCommits, modeRequests, modeSelect:
+		return "[w] Wrap  [/] Search  [?] Help"
 	case modeDiff:
 		return "[w] Wrap  [l] Lines  [f] Full file  [/] Search  [?] Help"
 	case modeFullFile:
@@ -1191,6 +1193,7 @@ func (m model) helpEntries() []helpEntry {
 			{"up/down", "Move cursor", "select a commit"},
 			{"enter/right", "Open files", "show files changed by the selected commit"},
 			{"tab", "Directories", "switch to directory summary"},
+			{"w", "Wrap lines", "show complete commit and request summary lines"},
 			{"s", "Select mode", "choose latest commits for remove or merge"},
 			{"v", "Request details", "show full linked request text"},
 			{"r", "Refresh", "reload commits and request links"},
@@ -1207,6 +1210,7 @@ func (m model) helpEntries() []helpEntry {
 		return append([]helpEntry{
 			{"up/down", "Move cursor", "select a commit row"},
 			{"space/enter", "Toggle selection", "only latest contiguous ranges can be applied"},
+			{"w", "Wrap lines", "show complete commit and request summary lines"},
 			{"x", "Remove", "reset selected latest commits and delete their request links"},
 			{"m", "Merge", "squash selected latest commits and move request links"},
 			{"s/left", "Back", "return to commit list"},
@@ -1225,6 +1229,7 @@ func (m model) helpEntries() []helpEntry {
 		return append([]helpEntry{
 			{"up/down", "Move cursor", "select a request"},
 			{"enter/right", "Open request", "show the full request body"},
+			{"w", "Wrap lines", "show complete request rows"},
 			{"tab", "Commits", "switch back to commit list"},
 			{"r", "Refresh", "reload request links"},
 			{"ctrl+c", "Quit", "exit agentgit"},
@@ -2014,7 +2019,10 @@ func (m model) commitFocusLine() int {
 		if i == m.commitIdx {
 			return line
 		}
-		line += 1 + len(m.links[commit.Hash])
+		line += m.listLineHeight(m.commitListLine(commit), m.frameInnerWidth())
+		if summary := requestSummaryLine(m.links[commit.Hash]); summary != "" {
+			line += m.listLineHeight(markerStyle.Render("  ● ")+summary, m.frameInnerWidth())
+		}
 	}
 	return 0
 }
@@ -2024,7 +2032,14 @@ func (m model) directoryFocusLine() int {
 }
 
 func (m model) requestFocusLine() int {
-	return m.requestIdx
+	line := 0
+	for i, req := range m.requests {
+		if i == m.requestIdx {
+			return line
+		}
+		line += m.listLineHeight(m.requestListLine(req), m.frameInnerWidth())
+	}
+	return 0
 }
 
 func (m model) fileFocusLine() int {
@@ -2034,17 +2049,9 @@ func (m model) fileFocusLine() int {
 func (m model) viewCommitsList(width int) string {
 	var b strings.Builder
 	for i, commit := range m.commits {
-		line := fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
-		line = truncateVisible(line, width)
-		if i == m.commitIdx {
-			line = cursorStyle.Render(line)
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
+		m.renderListLine(&b, m.commitListLine(commit), width, i == m.commitIdx)
 		if summary := requestSummaryLine(m.links[commit.Hash]); summary != "" {
-			b.WriteString(markerStyle.Render("  ● "))
-			b.WriteString(truncateVisible(summary, max(0, width-4)))
-			b.WriteByte('\n')
+			m.renderListLine(&b, markerStyle.Render("  ● ")+summary, width, false)
 		}
 	}
 	return b.String()
@@ -2060,17 +2067,9 @@ func (m model) viewSelectList(width int) string {
 		if m.selected[commit.Hash] {
 			box = "[x]"
 		}
-		line := fmt.Sprintf("%s %s %s  %s", markerStyle.Render(box), hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
-		line = truncateVisible(line, width)
-		if i == m.commitIdx {
-			line = cursorStyle.Render(line)
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
+		m.renderListLine(&b, fmt.Sprintf("%s %s %s  %s", markerStyle.Render(box), hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject), width, i == m.commitIdx)
 		if summary := requestSummaryLine(m.links[commit.Hash]); summary != "" {
-			b.WriteString(markerStyle.Render("  ● "))
-			b.WriteString(truncateVisible(summary, max(0, width-4)))
-			b.WriteByte('\n')
+			m.renderListLine(&b, markerStyle.Render("  ● ")+summary, width, false)
 		}
 	}
 	return b.String()
@@ -2082,22 +2081,46 @@ func (m model) viewRequestsList(width int) string {
 	}
 	var b strings.Builder
 	for i, req := range m.requests {
-		summary := fmt.Sprintf("● %s [%s %s] %s", formatRequestStartedAt(req.StartedAt), req.AgentName, req.Model, requestPreviewMessage(req.Message))
-		if len(req.CommitRefs) > 0 {
-			refs := make([]string, 0, len(req.CommitRefs))
-			for _, hash := range req.CommitRefs {
-				refs = append(refs, shortHash(hash))
-			}
-			summary += fmt.Sprintf(" (%s)", strings.Join(refs, ", "))
-		}
-		line := truncateVisible(summary, width)
-		if i == m.requestIdx {
-			line = cursorStyle.Render(line)
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
+		m.renderListLine(&b, m.requestListLine(req), width, i == m.requestIdx)
 	}
 	return b.String()
+}
+
+func (m model) commitListLine(commit git.Commit) string {
+	return fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
+}
+
+func (m model) requestListLine(req store.RequestSummary) string {
+	summary := fmt.Sprintf("● %s [%s %s] %s", formatRequestStartedAt(req.StartedAt), req.AgentName, req.Model, requestPreviewMessage(req.Message))
+	if len(req.CommitRefs) == 0 {
+		return summary
+	}
+	refs := make([]string, 0, len(req.CommitRefs))
+	for _, hash := range req.CommitRefs {
+		refs = append(refs, shortHash(hash))
+	}
+	return summary + fmt.Sprintf(" (%s)", strings.Join(refs, ", "))
+}
+
+func (m model) renderListLine(b *strings.Builder, line string, width int, selected bool) {
+	lines := []string{truncateVisible(line, width)}
+	if m.wrapLines {
+		lines = hardwrapLine(line, max(1, width))
+	}
+	for _, part := range lines {
+		if selected {
+			part = cursorStyle.Render(part)
+		}
+		b.WriteString(part)
+		b.WriteByte('\n')
+	}
+}
+
+func (m model) listLineHeight(line string, width int) int {
+	if !m.wrapLines {
+		return 1
+	}
+	return len(hardwrapLine(line, max(1, width)))
 }
 
 func (m model) viewRequestListDetailsPreview() string {

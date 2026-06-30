@@ -85,7 +85,7 @@ func TestLineNumberShortcutTogglesInDiffAndFullFile(t *testing.T) {
 }
 
 func TestWrapShortcutTogglesAndUsesUnifiedDiff(t *testing.T) {
-	for _, mode := range []mode{modeDiff, modeFullFile, modeRequest} {
+	for _, mode := range []mode{modeCommits, modeRequests, modeRequest, modeDiff, modeFullFile, modeSelect} {
 		m := model{mode: mode, diffMode: diffSplit, scroll: 5}
 
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
@@ -680,6 +680,76 @@ func TestRequestListRendersBulletTimeAgentRequestAndShortCommitHashes(t *testing
 	}
 	if strings.Contains(view, "1234567890ab") || strings.Contains(view, "abcdef123456") {
 		t.Fatalf("request list row retained long commit hashes:\n%s", view)
+	}
+}
+
+func TestWrappedCommitListPreservesLongContentAndFocusLine(t *testing.T) {
+	m := model{
+		mode:      modeCommits,
+		wrapLines: true,
+		width:     24,
+		commits: []git.Commit{
+			{Hash: "11111111", ShortHash: "11111111", Date: "06-30 12:34", Subject: "first commit subject is very long"},
+			{Hash: "22222222", ShortHash: "22222222", Date: "06-30 12:35", Subject: "second commit subject is also very long"},
+		},
+		links: map[string][]store.LinkedRequest{
+			"11111111": {{AgentName: "codex", Model: "gpt-5", Message: "request summary that is also long"}},
+		},
+		commitIdx: 1,
+	}
+
+	view := ansi.Strip(m.viewCommitsList(24))
+	joined := strings.ReplaceAll(view, "\n", "")
+	if !strings.Contains(joined, "first commit subject is very long") {
+		t.Fatalf("wrapped commit list lost first commit subject:\n%s", view)
+	}
+	if !strings.Contains(joined, "request summary that is also long") {
+		t.Fatalf("wrapped commit list lost request summary:\n%s", view)
+	}
+	if !strings.Contains(joined, "second commit subject is also very long") {
+		t.Fatalf("wrapped commit list lost second commit subject:\n%s", view)
+	}
+	if got := m.commitFocusLine(); got <= 1 {
+		t.Fatalf("commitFocusLine = %d, want wrapped offset beyond first row", got)
+	}
+}
+
+func TestWrappedRequestListPreservesLongContentAndFocusLine(t *testing.T) {
+	m := model{
+		mode:       modeRequests,
+		wrapLines:  true,
+		width:      28,
+		requestIdx: 1,
+		requests: []store.RequestSummary{
+			{
+				ID:         1,
+				AgentName:  "codex",
+				Model:      "gpt-5",
+				Message:    "first request body is very long and should wrap cleanly",
+				StartedAt:  "2026-06-30T12:34:56Z",
+				CommitRefs: []string{"1111111122222222"},
+			},
+			{
+				ID:         2,
+				AgentName:  "claude",
+				Model:      "sonnet",
+				Message:    "second request body is also long and should remain visible",
+				StartedAt:  "2026-06-30T12:35:56Z",
+				CommitRefs: []string{"3333333344444444"},
+			},
+		},
+	}
+
+	view := ansi.Strip(m.viewRequestsList(28))
+	joined := strings.ReplaceAll(view, "\n", "")
+	if !strings.Contains(joined, "first request body is very long and should wrap cleanly") {
+		t.Fatalf("wrapped request list lost first request body:\n%s", view)
+	}
+	if !strings.Contains(joined, "second request body is also long and should remain visible") {
+		t.Fatalf("wrapped request list lost second request body:\n%s", view)
+	}
+	if got := m.requestFocusLine(); got <= 1 {
+		t.Fatalf("requestFocusLine = %d, want wrapped offset beyond first row", got)
 	}
 }
 
