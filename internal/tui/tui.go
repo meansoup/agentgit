@@ -127,6 +127,7 @@ var (
 	requestStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	markerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	fileStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	dirStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	addLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
 	delLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
 	hunkStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
@@ -2200,22 +2201,18 @@ func (m model) viewDirectoryList(width int) string {
 	}
 	var b strings.Builder
 	for i, entry := range entries {
-		kind := "[f]"
 		name := entry.DisplayName
+		nameStyle := fileStyle
 		if entry.IsDir {
-			if m.expanded[entry.Path] {
-				kind = "[-]"
-			} else {
-				kind = "[+]"
-			}
 			name += "/"
+			nameStyle = dirStyle
 		}
 		indent := strings.Repeat("  ", entry.Depth)
 		detail := ""
 		if entry.IsDir {
 			detail = fmt.Sprintf("  %d files", entry.FileCount)
 		}
-		line := indent + mutedStyle.Render(kind) + " " + fileStyle.Render(name) + mutedStyle.Render(detail)
+		line := indent + nameStyle.Render(name) + mutedStyle.Render(detail)
 		line = truncateVisible(line, width)
 		if i == m.dirIdx {
 			line = cursorStyle.Render(line)

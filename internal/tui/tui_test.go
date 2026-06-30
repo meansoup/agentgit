@@ -753,6 +753,32 @@ func TestWrappedRequestListPreservesLongContentAndFocusLine(t *testing.T) {
 	}
 }
 
+func TestDirectoryListUsesColorsInsteadOfKindPrefixes(t *testing.T) {
+	m := model{
+		mode: modeDirectories,
+		expanded: map[string]bool{
+			"internal": true,
+		},
+		dirEntries: []directoryEntry{
+			{Path: "README.md", DisplayName: "README.md"},
+			{Path: "internal", DisplayName: "internal", IsDir: true, FileCount: 2},
+			{Path: "internal/tui.go", DisplayName: "tui.go", Depth: 1},
+		},
+	}
+
+	view := ansi.Strip(m.viewDirectoryList(80))
+
+	if strings.Contains(view, "[f]") || strings.Contains(view, "[+]") || strings.Contains(view, "[-]") {
+		t.Fatalf("directory list still contains kind prefixes:\n%s", view)
+	}
+	if !strings.Contains(view, "internal/  2 files") {
+		t.Fatalf("directory list missing trailing slash directory marker:\n%s", view)
+	}
+	if !strings.Contains(view, "README.md") || !strings.Contains(view, "  tui.go") {
+		t.Fatalf("directory list missing file entries:\n%s", view)
+	}
+}
+
 func TestSearchBodyRendersOnlyVisibleResults(t *testing.T) {
 	results := make([]fileSearchResult, 1000)
 	for i := range results {
