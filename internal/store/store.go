@@ -488,9 +488,9 @@ func RequestsByRepo(repoRoot string) ([]RequestSummary, error) {
 		        ar.model,
 		        ar.message,
 		        ar.started_at,
-		        rc.commit_hash
+		        COALESCE(rc.commit_hash, '')
 		 FROM agent_requests ar
-		 JOIN request_commits rc
+		 LEFT JOIN request_commits rc
 		   ON rc.request_id = ar.id AND rc.repo_root = ar.repo_root
 		 WHERE ar.repo_root = ?
 		 ORDER BY ar.started_at DESC, ar.id DESC, rc.linked_at ASC, rc.commit_hash ASC`,
@@ -526,7 +526,9 @@ func RequestsByRepo(repoRoot string) ([]RequestSummary, error) {
 				StartedAt: startedAt,
 			})
 		}
-		result[index].CommitRefs = append(result[index].CommitRefs, commitRef)
+		if strings.TrimSpace(commitRef) != "" {
+			result[index].CommitRefs = append(result[index].CommitRefs, commitRef)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

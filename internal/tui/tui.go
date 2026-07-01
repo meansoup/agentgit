@@ -2115,15 +2115,25 @@ func (m model) commitListLine(commit git.Commit) string {
 }
 
 func (m model) requestListLine(req store.RequestSummary) string {
-	summary := fmt.Sprintf("● %s [%s %s] %s", formatRequestStartedAt(req.StartedAt), req.AgentName, req.Model, requestPreviewMessage(req.Message))
+	var b strings.Builder
+	b.WriteString(markerStyle.Render("●"))
+	b.WriteString(" ")
+	b.WriteString(mutedStyle.Render(formatRequestStartedAt(req.StartedAt)))
+	b.WriteString(" ")
+	b.WriteString(providerStyle.Render(fmt.Sprintf("[%s %s]", req.AgentName, req.Model)))
+	b.WriteString(" ")
+	b.WriteString(requestStyle.Render(requestPreviewMessage(req.Message)))
 	if len(req.CommitRefs) == 0 {
-		return summary
+		b.WriteString(mutedStyle.Render(" (no commits)"))
+		return b.String()
 	}
 	refs := make([]string, 0, len(req.CommitRefs))
 	for _, hash := range req.CommitRefs {
 		refs = append(refs, shortHash(hash))
 	}
-	return summary + fmt.Sprintf(" (%s)", strings.Join(refs, ", "))
+	b.WriteString(" ")
+	b.WriteString(hashStyle.Render("(" + strings.Join(refs, ", ") + ")"))
+	return b.String()
 }
 
 func (m model) renderListLine(b *strings.Builder, line string, width int, selected bool) {

@@ -189,14 +189,15 @@ func TestRequestsByRepoKeepsLatestOrderAndCommitRefs(t *testing.T) {
 	}
 }
 
-func TestRequestsByRepoExcludesRequestsWithoutLinkedCommits(t *testing.T) {
+func TestRequestsByRepoIncludesRequestsWithoutLinkedCommits(t *testing.T) {
 	t.Setenv("AGENTGIT_DB", t.TempDir()+"/agentgit.sqlite3")
 
 	linkedID, err := CreateRequest("codex", "codex", "gpt-5", "linked", "/repo", "session-1", "turn-1", "head", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateRequest("claude", "claude", "sonnet", "unlinked", "/repo", "session-2", "turn-2", "head", nil); err != nil {
+	unlinkedID, err := CreateRequest("claude", "claude", "sonnet", "unlinked", "/repo", "session-2", "turn-2", "head", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := LinkCommit(linkedID, "abc111", "/repo"); err != nil {
@@ -207,10 +208,13 @@ func TestRequestsByRepoExcludesRequestsWithoutLinkedCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("RequestsByRepo len = %d, want 1", len(got))
+	if len(got) != 2 {
+		t.Fatalf("RequestsByRepo len = %d, want 2", len(got))
 	}
-	if got[0].ID != linkedID || got[0].Message != "linked" {
-		t.Fatalf("RequestsByRepo[0] = %+v, want linked request", got[0])
+	if got[0].ID != unlinkedID || got[0].Message != "unlinked" || len(got[0].CommitRefs) != 0 {
+		t.Fatalf("RequestsByRepo[0] = %+v, want unlinked request without commit refs", got[0])
+	}
+	if got[1].ID != linkedID || got[1].Message != "linked" || len(got[1].CommitRefs) != 1 || got[1].CommitRefs[0] != "abc111" {
+		t.Fatalf("RequestsByRepo[1] = %+v, want linked request with abc111", got[1])
 	}
 }

@@ -683,6 +683,28 @@ func TestRequestListRendersBulletTimeAgentRequestAndShortCommitHashes(t *testing
 	}
 }
 
+func TestRequestListMarksRequestsWithoutLinkedCommits(t *testing.T) {
+	m := model{
+		mode: modeRequests,
+		requests: []store.RequestSummary{
+			{
+				ID:        9,
+				AgentName: "codex",
+				Model:     "gpt-5",
+				Message:   "request without file changes",
+				StartedAt: "2026-07-02T10:11:12Z",
+			},
+		},
+		width: 120,
+	}
+
+	view := ansi.Strip(m.viewRequestsList(120))
+
+	if !strings.Contains(view, "● 07-02 10:11 [codex gpt-5] request without file changes (no commits)") {
+		t.Fatalf("request list missing no-commits marker:\n%s", view)
+	}
+}
+
 func TestWrappedCommitListPreservesLongContentAndFocusLine(t *testing.T) {
 	m := model{
 		mode:      modeCommits,
