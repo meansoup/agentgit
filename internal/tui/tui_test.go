@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/minkuik/agentgit/internal/git"
-	"github.com/minkuik/agentgit/internal/store"
+	"github.com/minkuik/agentgit/internal/transcript"
 )
 
 func TestStyleDiffLineStripsNestedANSIWhenRenderingBackground(t *testing.T) {
@@ -85,7 +85,7 @@ func TestLineNumberShortcutTogglesInDiffAndFullFile(t *testing.T) {
 }
 
 func TestWrapShortcutTogglesAndUsesUnifiedDiff(t *testing.T) {
-	for _, mode := range []mode{modeCommits, modeRequests, modeRequest, modeDiff, modeFullFile, modeSelect} {
+	for _, mode := range []mode{modeCommits, modeRequest, modeDiff, modeFullFile} {
 		m := model{mode: mode, diffMode: diffSplit, scroll: 5}
 
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
@@ -145,10 +145,7 @@ func TestWrappedDiffPreservesLongCodeLine(t *testing.T) {
 func TestWrappedRequestPreservesLongLine(t *testing.T) {
 	message := "abcdefghijklmnopqrstuvwxyz"
 	m := model{
-		commits: []git.Commit{{Hash: "abc", ShortHash: "abc", Subject: "request"}},
-		links: map[string][]store.LinkedRequest{
-			"abc": {{AgentName: "codex", Model: "gpt", Message: message}},
-		},
+		requests:  []transcript.Request{{Agent: "codex", Model: "gpt", Message: message}},
 		mode:      modeRequest,
 		wrapLines: true,
 		width:     10,
@@ -277,29 +274,81 @@ func TestRequestPreviewMessageUsesFirstNonEmptyLine(t *testing.T) {
 	}
 }
 
-func TestRequestSummaryLineIsSingleLine(t *testing.T) {
-	requests := []store.LinkedRequest{
-		{
-			AgentName: "gemini",
-			Model:     "gemini-2.5-pro",
-			Message:   "Review @internal/tui/tui.go\n\nfull file content\nmore content",
-		},
-		{
-			AgentName: "codex",
-			Model:     "gpt-5",
-			Message:   "second request",
-		},
+func TestRequestListLineIsSingleLine(t *testing.T) {
+	m := model{}
+	req := transcript.Request{
+		Agent:     "gemini",
+		Model:     "gemini-2.5-pro",
+		Message:   "Review @internal/tui/tui.go\n\nfull file content\nmore content",
+		Timestamp: "2026-06-25T13:14:15Z",
 	}
 
-	got := ansi.Strip(requestSummaryLine(requests))
+	got := ansi.Strip(m.requestListLine(req))
 	if strings.Contains(got, "\n") {
-		t.Fatalf("requestSummaryLine contained newline: %q", got)
+		t.Fatalf("requestListLine contained newline: %q", got)
 	}
 	if strings.Contains(got, "full file content") || strings.Contains(got, "more content") {
-		t.Fatalf("requestSummaryLine leaked multiline request content: %q", got)
+		t.Fatalf("requestListLine leaked multiline request content: %q", got)
 	}
-	if !strings.Contains(got, "Review @internal/tui/tui.go") || !strings.Contains(got, "(+1)") {
-		t.Fatalf("requestSummaryLine missing expected preview details: %q", got)
+	if !strings.Contains(got, "Review @internal/tui/tui.go") || !strings.Contains(got, "[gemini gemini-2.5-pro]") {
+		t.Fatalf("requestListLine missing expected preview details: %q", got)
+	}
+}
+
+func TestHighlightDiffPreservesLineCountOrderAndMetadata(t *testing.T) {
+	lines := []string{
+		"--- a/main.go",
+		"+++ b/main.go",
+		"@@ -1,3 +1,4 @@",
+		" package main",
+		"-func old() {}",
+		"+func new() {}",
+		`\ No newline at end of file`,
+	}
+
+	got := highlightDiff("main.go", lines)
+
+	if len(got) != len(lines) {
+		t.Fatalf("highlightDiff len = %d, want %d", len(got), len(lines))
+	}
+	for _, index := range []int{0, 1, 2, 6} {
+		if got[index] != lines[index] {
+			t.Fatalf("metadata line %d changed:\n got %q\nwant %q", index, got[index], lines[index])
+		}
+	}
+	for _, index := range []int{3, 4, 5} {
+		stripped := ansi.Strip(got[index])
+		if stripped != lines[index] {
+			t.Fatalf("code line %d stripped = %q, want %q", index, stripped, lines[index])
+		}
+	}
+}
+
+func TestRenderedFileCachesAreBoundedLRU(t *testing.T) {
+	m := model{}
+	for i := 0; i < renderedFileCacheLimit+5; i++ {
+		key := fmt.Sprintf("diff-%02d", i)
+		m.storeDiffCache(key, []string{key})
+		m.storeFullCache(key, []string{key})
+	}
+
+	if len(m.diffCache) != renderedFileCacheLimit || len(m.diffCacheKeys) != renderedFileCacheLimit {
+		t.Fatalf("diff cache size = %d/%d, want %d", len(m.diffCache), len(m.diffCacheKeys), renderedFileCacheLimit)
+	}
+	if len(m.fullCache) != renderedFileCacheLimit || len(m.fullCacheKeys) != renderedFileCacheLimit {
+		t.Fatalf("full cache size = %d/%d, want %d", len(m.fullCache), len(m.fullCacheKeys), renderedFileCacheLimit)
+	}
+	if _, ok := m.diffCache["diff-00"]; ok {
+		t.Fatal("oldest diff cache entry was retained")
+	}
+	if _, ok := m.fullCache["diff-00"]; ok {
+		t.Fatal("oldest full cache entry was retained")
+	}
+	if got := m.diffCacheKeys[len(m.diffCacheKeys)-1]; got != "diff-54" {
+		t.Fatalf("newest diff cache key = %q, want diff-54", got)
+	}
+	if got := m.fullCacheKeys[len(m.fullCacheKeys)-1]; got != "diff-54" {
+		t.Fatalf("newest full cache key = %q, want diff-54", got)
 	}
 }
 
@@ -328,6 +377,84 @@ func TestHeaderShowsRepoContext(t *testing.T) {
 	}
 	if got := lipgloss.Height(m.viewHeader()); got != 5 {
 		t.Fatalf("header height = %d, want 5", got)
+	}
+}
+
+func TestSelectedLatestRangeAllowsContiguousHeadRangeWithUncommittedEntry(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+			{Hash: "older", ShortHash: "older", Subject: "older"},
+			{Hash: "oldest", ShortHash: "oldest", Subject: "oldest"},
+		},
+		selected: map[string]bool{
+			"head":  true,
+			"older": true,
+		},
+	}
+
+	got, err := m.selectedLatestRange()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Hash != "head" || got[1].Hash != "older" {
+		t.Fatalf("selectedLatestRange = %+v, want head and older", got)
+	}
+}
+
+func TestSelectedLatestRangeRejectsSelectionThatSkipsHead(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+			{Hash: "older", ShortHash: "older", Subject: "older"},
+		},
+		selected: map[string]bool{
+			"older": true,
+		},
+	}
+
+	if _, err := m.selectedLatestRange(); err == nil {
+		t.Fatal("selectedLatestRange succeeded without selecting HEAD")
+	}
+}
+
+func TestSelectedLatestRangeRejectsGaps(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+			{Hash: "middle", ShortHash: "middle", Subject: "middle"},
+			{Hash: "older", ShortHash: "older", Subject: "older"},
+		},
+		selected: map[string]bool{
+			"head":  true,
+			"older": true,
+		},
+	}
+
+	if _, err := m.selectedLatestRange(); err == nil {
+		t.Fatal("selectedLatestRange succeeded with a gap")
+	}
+}
+
+func TestToggleSelectedCommitIgnoresUncommittedChanges(t *testing.T) {
+	m := model{
+		commits: []git.Commit{
+			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
+			{Hash: "head", ShortHash: "head", Subject: "head"},
+		},
+		selected:  map[string]bool{},
+		mode:      modeSelect,
+		commitIdx: 0,
+	}
+
+	m.toggleSelectedCommit()
+
+	if m.selected[git.UncommittedHash] {
+		t.Fatal("uncommitted entry was selected")
+	}
+	if !strings.Contains(m.notice, "uncommitted") {
+		t.Fatalf("notice = %q, want uncommitted warning", m.notice)
 	}
 }
 
@@ -426,12 +553,10 @@ func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
 		for _, mode := range []mode{
 			modeCommits,
 			modeDirectories,
-			modeRequests,
 			modeFiles,
 			modeDiff,
 			modeFullFile,
 			modeRequest,
-			modeSelect,
 		} {
 			m := model{
 				root:   "/Users/example/develop/git/agentgit",
@@ -599,15 +724,12 @@ func TestSearchEscapeReturnsToPreviousView(t *testing.T) {
 	}
 }
 
-func TestTabCyclesTopLevelViewsIncludingRequests(t *testing.T) {
+func TestTabCyclesTopLevelCommitAndDirectoryViews(t *testing.T) {
 	m := model{
 		root:   newTUITestRepo(t),
 		mode:   modeCommits,
 		width:  100,
 		height: 24,
-		requests: []store.RequestSummary{
-			{ID: 1, AgentName: "codex", Model: "gpt-5", Message: "one"},
-		},
 	}
 	writeTUITestFile(t, m.root, "internal/tui/tui.go", "package tui\n")
 
@@ -619,22 +741,17 @@ func TestTabCyclesTopLevelViewsIncludingRequests(t *testing.T) {
 
 	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got = updated.(model)
-	if got.mode != modeRequests {
-		t.Fatalf("second tab mode = %v, want modeRequests", got.mode)
-	}
-
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
-	got = updated.(model)
 	if got.mode != modeCommits {
-		t.Fatalf("third tab mode = %v, want modeCommits", got.mode)
+		t.Fatalf("second tab mode = %v, want modeCommits", got.mode)
 	}
 }
 
-func TestRequestListEnterOpensFullRequest(t *testing.T) {
+func TestRequestDrawerEnterOpensFullRequest(t *testing.T) {
 	m := model{
-		mode: modeRequests,
-		requests: []store.RequestSummary{
-			{ID: 7, AgentName: "claude", Model: "sonnet", Message: "full request body", StartedAt: "2026-06-25T00:00:00Z", CommitRefs: []string{"abc123"}},
+		mode:          modeCommits,
+		requestDrawer: true,
+		requests: []transcript.Request{
+			{ID: "7", Agent: "claude", Model: "sonnet", Message: "full request body", Timestamp: "2026-06-25T00:00:00Z", EditedFiles: []string{"README.md"}},
 		},
 		width:  80,
 		height: 24,
@@ -646,28 +763,26 @@ func TestRequestListEnterOpensFullRequest(t *testing.T) {
 	if got.mode != modeRequest {
 		t.Fatalf("mode = %v, want modeRequest", got.mode)
 	}
-	if got.requestReturn != modeRequests {
-		t.Fatalf("requestReturn = %v, want modeRequests", got.requestReturn)
+	if got.requestReturn != modeCommits {
+		t.Fatalf("requestReturn = %v, want modeCommits", got.requestReturn)
 	}
 	view := ansi.Strip(got.viewRequestFull())
-	for _, want := range []string{"claude", "sonnet", "abc123", "full request body"} {
+	for _, want := range []string{"claude", "sonnet", "README.md", "full request body"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("request full view missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestRequestListRendersBulletTimeAgentRequestAndShortCommitHashes(t *testing.T) {
+func TestRequestListRendersBulletTimeAgentAndRequest(t *testing.T) {
 	m := model{
-		mode: modeRequests,
-		requests: []store.RequestSummary{
+		requests: []transcript.Request{
 			{
-				ID:         7,
-				AgentName:  "claude",
-				Model:      "sonnet",
-				Message:    "full request body",
-				StartedAt:  "2026-06-25T13:14:15Z",
-				CommitRefs: []string{"1234567890abcdef", "abcdef1234567890"},
+				ID:        "7",
+				Agent:     "claude",
+				Model:     "sonnet",
+				Message:   "full request body",
+				Timestamp: "2026-06-25T13:14:15Z",
 			},
 		},
 		width: 120,
@@ -675,33 +790,8 @@ func TestRequestListRendersBulletTimeAgentRequestAndShortCommitHashes(t *testing
 
 	view := ansi.Strip(m.viewRequestsList(120))
 
-	if !strings.Contains(view, "● 06-25 13:14 [claude sonnet] full request body (12345678, abcdef12)") {
+	if !strings.Contains(view, "● 06-25 13:14 [claude sonnet] full request body") {
 		t.Fatalf("request list row missing expected format:\n%s", view)
-	}
-	if strings.Contains(view, "1234567890ab") || strings.Contains(view, "abcdef123456") {
-		t.Fatalf("request list row retained long commit hashes:\n%s", view)
-	}
-}
-
-func TestRequestListMarksRequestsWithoutLinkedCommits(t *testing.T) {
-	m := model{
-		mode: modeRequests,
-		requests: []store.RequestSummary{
-			{
-				ID:        9,
-				AgentName: "codex",
-				Model:     "gpt-5",
-				Message:   "request without file changes",
-				StartedAt: "2026-07-02T10:11:12Z",
-			},
-		},
-		width: 120,
-	}
-
-	view := ansi.Strip(m.viewRequestsList(120))
-
-	if !strings.Contains(view, "● 07-02 10:11 [codex gpt-5] request without file changes (no commits)") {
-		t.Fatalf("request list missing no-commits marker:\n%s", view)
 	}
 }
 
@@ -714,9 +804,6 @@ func TestWrappedCommitListPreservesLongContentAndFocusLine(t *testing.T) {
 			{Hash: "11111111", ShortHash: "11111111", Date: "06-30 12:34", Subject: "first commit subject is very long"},
 			{Hash: "22222222", ShortHash: "22222222", Date: "06-30 12:35", Subject: "second commit subject is also very long"},
 		},
-		links: map[string][]store.LinkedRequest{
-			"11111111": {{AgentName: "codex", Model: "gpt-5", Message: "request summary that is also long"}},
-		},
 		commitIdx: 1,
 	}
 
@@ -724,9 +811,6 @@ func TestWrappedCommitListPreservesLongContentAndFocusLine(t *testing.T) {
 	joined := strings.ReplaceAll(view, "\n", "")
 	if !strings.Contains(joined, "first commit subject is very long") {
 		t.Fatalf("wrapped commit list lost first commit subject:\n%s", view)
-	}
-	if !strings.Contains(joined, "request summary that is also long") {
-		t.Fatalf("wrapped commit list lost request summary:\n%s", view)
 	}
 	if !strings.Contains(joined, "second commit subject is also very long") {
 		t.Fatalf("wrapped commit list lost second commit subject:\n%s", view)
@@ -738,26 +822,23 @@ func TestWrappedCommitListPreservesLongContentAndFocusLine(t *testing.T) {
 
 func TestWrappedRequestListPreservesLongContentAndFocusLine(t *testing.T) {
 	m := model{
-		mode:       modeRequests,
 		wrapLines:  true,
 		width:      28,
 		requestIdx: 1,
-		requests: []store.RequestSummary{
+		requests: []transcript.Request{
 			{
-				ID:         1,
-				AgentName:  "codex",
-				Model:      "gpt-5",
-				Message:    "first request body is very long and should wrap cleanly",
-				StartedAt:  "2026-06-30T12:34:56Z",
-				CommitRefs: []string{"1111111122222222"},
+				ID:        "1",
+				Agent:     "codex",
+				Model:     "gpt-5",
+				Message:   "first request body is very long and should wrap cleanly",
+				Timestamp: "2026-06-30T12:34:56Z",
 			},
 			{
-				ID:         2,
-				AgentName:  "claude",
-				Model:      "sonnet",
-				Message:    "second request body is also long and should remain visible",
-				StartedAt:  "2026-06-30T12:35:56Z",
-				CommitRefs: []string{"3333333344444444"},
+				ID:        "2",
+				Agent:     "claude",
+				Model:     "sonnet",
+				Message:   "second request body is also long and should remain visible",
+				Timestamp: "2026-06-30T12:35:56Z",
 			},
 		},
 	}
@@ -1181,12 +1262,9 @@ func TestLeftFromFileCollapsesAndSelectsParentDirectory(t *testing.T) {
 	}
 }
 
-func TestTabCyclesBetweenCommitDirectoryAndRequestViews(t *testing.T) {
+func TestTabCyclesBetweenCommitAndDirectoryViews(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "c1", ShortHash: "c1", Subject: "change"}},
-		requests: []store.RequestSummary{
-			{ID: 1, AgentName: "codex", Model: "gpt-5", Message: "request"},
-		},
 		fileCache: map[string][]string{
 			"c1": {"internal/tui/tui.go"},
 		},
@@ -1201,14 +1279,8 @@ func TestTabCyclesBetweenCommitDirectoryAndRequestViews(t *testing.T) {
 
 	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got = updated.(model)
-	if got.mode != modeRequests {
-		t.Fatalf("mode after second tab = %v, want modeRequests", got.mode)
-	}
-
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
-	got = updated.(model)
 	if got.mode != modeCommits {
-		t.Fatalf("mode after third tab = %v, want modeCommits", got.mode)
+		t.Fatalf("mode after second tab = %v, want modeCommits", got.mode)
 	}
 }
 
@@ -1319,7 +1391,6 @@ func TestRefreshCurrentDirectoryFileReloadsWorktreeContent(t *testing.T) {
 		root:      root,
 		limit:     10,
 		commits:   commits,
-		links:     map[string][]store.LinkedRequest{},
 		fileCache: map[string][]string{},
 		diffCache: map[string][]string{},
 		fullCache: map[string][]string{},
@@ -1365,104 +1436,6 @@ func TestBackFromCommitFileReturnsToCommits(t *testing.T) {
 	}
 }
 
-func TestSelectedLatestRangeAllowsContiguousHeadRangeWithUncommittedEntry(t *testing.T) {
-	m := model{
-		commits: []git.Commit{
-			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
-			{Hash: "head", ShortHash: "head", Subject: "head"},
-			{Hash: "older", ShortHash: "older", Subject: "older"},
-			{Hash: "oldest", ShortHash: "oldest", Subject: "oldest"},
-		},
-		selected: map[string]bool{
-			"head":  true,
-			"older": true,
-		},
-	}
-
-	got, err := m.selectedLatestRange(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].Hash != "head" || got[1].Hash != "older" {
-		t.Fatalf("selectedLatestRange = %+v, want head and older", got)
-	}
-}
-
-func TestSelectedLatestRangeRejectsSelectionThatSkipsHead(t *testing.T) {
-	m := model{
-		commits: []git.Commit{
-			{Hash: "head", ShortHash: "head", Subject: "head"},
-			{Hash: "older", ShortHash: "older", Subject: "older"},
-		},
-		selected: map[string]bool{
-			"older": true,
-		},
-	}
-
-	if _, err := m.selectedLatestRange(false); err == nil {
-		t.Fatal("selectedLatestRange succeeded without selecting HEAD")
-	}
-}
-
-func TestSelectedLatestRangeRejectsGaps(t *testing.T) {
-	m := model{
-		commits: []git.Commit{
-			{Hash: "head", ShortHash: "head", Subject: "head"},
-			{Hash: "middle", ShortHash: "middle", Subject: "middle"},
-			{Hash: "older", ShortHash: "older", Subject: "older"},
-		},
-		selected: map[string]bool{
-			"head":  true,
-			"older": true,
-		},
-	}
-
-	if _, err := m.selectedLatestRange(false); err == nil {
-		t.Fatal("selectedLatestRange succeeded with a gap")
-	}
-}
-
-func TestToggleSelectedCommitAllowsUncommittedChanges(t *testing.T) {
-	m := model{
-		commits: []git.Commit{
-			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
-			{Hash: "head", ShortHash: "head", Subject: "head"},
-		},
-		selected:  map[string]bool{},
-		mode:      modeSelect,
-		commitIdx: 0,
-	}
-
-	m.toggleSelectedCommit()
-
-	if !m.selected[git.UncommittedHash] {
-		t.Fatal("uncommitted entry was not selected")
-	}
-}
-
-func TestSelectedLatestRangeAllowsOnlyUncommittedForRemove(t *testing.T) {
-	m := model{
-		commits: []git.Commit{
-			{Hash: git.UncommittedHash, ShortHash: "uncommitted", Subject: "dirty"},
-			{Hash: "head", ShortHash: "head", Subject: "head"},
-		},
-		selected: map[string]bool{
-			git.UncommittedHash: true,
-		},
-	}
-
-	got, err := m.selectedLatestRange(true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("selectedLatestRange = %+v, want no commits for uncommitted-only selection", got)
-	}
-	if _, err := m.selectedLatestRange(false); err == nil {
-		t.Fatal("selectedLatestRange allowed uncommitted selection for merge")
-	}
-}
-
 func newTUITestRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -1490,4 +1463,72 @@ func runTUITestGit(t *testing.T, root string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+}
+
+func BenchmarkHighlightLargeGoFile(b *testing.B) {
+	var code strings.Builder
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&code, "func value%d() int { return %d }\n", i, i)
+	}
+	text := code.String()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = Highlight("bench.go", text)
+	}
+}
+
+func BenchmarkHighlightDiffLargeGoFile(b *testing.B) {
+	lines := make([]string, 0, 3003)
+	lines = append(lines, "--- a/bench.go", "+++ b/bench.go", "@@ -1,3000 +1,3000 @@")
+	for i := 0; i < 3000; i++ {
+		switch i % 3 {
+		case 0:
+			lines = append(lines, fmt.Sprintf("-func old%d() int { return %d }", i, i))
+		case 1:
+			lines = append(lines, fmt.Sprintf("+func new%d() int { return %d }", i, i))
+		default:
+			lines = append(lines, fmt.Sprintf(" func keep%d() int { return %d }", i, i))
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = highlightDiff("bench.go", lines)
+	}
+}
+
+func BenchmarkHighlightDiffLineByLineLargeGoFile(b *testing.B) {
+	lines := make([]string, 0, 3003)
+	lines = append(lines, "--- a/bench.go", "+++ b/bench.go", "@@ -1,3000 +1,3000 @@")
+	for i := 0; i < 3000; i++ {
+		switch i % 3 {
+		case 0:
+			lines = append(lines, fmt.Sprintf("-func old%d() int { return %d }", i, i))
+		case 1:
+			lines = append(lines, fmt.Sprintf("+func new%d() int { return %d }", i, i))
+		default:
+			lines = append(lines, fmt.Sprintf(" func keep%d() int { return %d }", i, i))
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = highlightDiffLineByLineForBenchmark("bench.go", lines)
+	}
+}
+
+func highlightDiffLineByLineForBenchmark(filename string, lines []string) []string {
+	result := make([]string, len(lines))
+	for i, line := range lines {
+		if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ') {
+			highlighted := Highlight(filename, line[1:])
+			if len(highlighted) > 0 {
+				result[i] = string(line[0]) + highlighted[0]
+				continue
+			}
+		}
+		result[i] = line
+	}
+	return result
 }

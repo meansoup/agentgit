@@ -1,21 +1,13 @@
 # agentgit
 
-**agentgit**은 AI 코딩 에이전트의 요청(Request)과 Git 커밋을 연결해주는 도구입니다. 기존처럼 에이전트(`codex`, `gemini`, `claude`)를 사용하면, `agentgit`이 백그라운드에서 요청 내용을 기록하고 생성된 커밋을 TUI 브라우저로 보여줍니다.
+**agentgit**은 읽기 전용 Git 및 AI 에이전트 트랜스크립트 브라우저입니다. 에이전트(`codex`, `gemini`, `claude`)는 기존처럼 사용하고, 저장소에서 `agentgit`을 실행하면 Git 히스토리와 로컬 트랜스크립트에 실제로 남아 있는 request 프롬프트를 함께 볼 수 있습니다.
 
 [English Docs (README.md)](./README.md)
 
 ## 빠른 시작
 
 1. **설치**: `agentgit` 바이너리를 `PATH` 경로에 추가합니다.
-2. **설정**: 사용할 AI 에이전트와 연결합니다.
-   ```sh
-   agentgit setup codex
-   # 또는
-   agentgit setup gemini
-   # 또는
-   agentgit setup claude
-   ```
-3. **사용**: 에이전트(예: `codex`)를 평소처럼 사용한 뒤, 연결된 히스토리를 확인합니다.
+2. **사용**: 에이전트(예: `codex`)를 평소처럼 사용한 뒤, 저장소에서 실행합니다.
    ```sh
    agentgit
    ```
@@ -26,7 +18,6 @@
 | :--- | :--- |
 | `agentgit` | 현재 디렉토리의 히스토리 브라우저를 엽니다. |
 | `agentgit [path]` | 특정 저장소, 폴더 또는 파일의 히스토리를 확인합니다. |
-| `agentgit setup [agent]` | `codex`, `gemini` 또는 `claude`를 위한 훅(hook)을 설치합니다. |
 | `agentgit --limit 50` | 표시할 커밋 개수를 제한합니다. |
 
 ## TUI 조작법
@@ -35,13 +26,13 @@
 
 - **이동**: `Up`/`Down`
 - **커밋/디렉토리 뷰 전환**: `Tab`
+- **최신 커밋 선택**: `s` 진입, `Space` 선택, `x` 삭제, `m` 병합, `y` 확인
 - **파일 검색**: `/` 입력 후 fuzzy 검색하고 `Enter`로 Directory 뷰에서 파일 위치 열기
-- **최신 커밋 선택**: `s` 진입, `Space` 선택, `x` 제거, `m` 병합, `y` 확인
 - **디렉토리 폴더**: `Enter`/`Right`로 폴더 접기/펼치기 및 파일 열기
 - **상세 보기**: `Right` 또는 `Enter` (커밋 → 파일 목록 → Diff)
 - **이미지 열기**: 파일 목록에서 이미지 파일 선택 후 `Enter`
 - **뒤로 가기**: `Left` 또는 `Backspace`
-- **요청 상세 보기**: `v`
+- **Request 드로어**: `v`로 하단 드로어 열기/닫기, `Enter`로 전체 request 상세 보기
 - **새로고침**: `r`
 - **화면 전환**: `m` (Unified/Split diff)
 - **줄 번호 전환**: `l` (Diff/전체 파일)
@@ -52,11 +43,11 @@
 
 ## 동작 방식
 
-- **훅(Hooks)**: `agentgit setup`은 에이전트 이벤트가 발생할 때 실행되는 라이프사이클 훅을 설치합니다.
-- **자동 커밋 + 연결**: 에이전트 요청 시작 시 작업 트리가 깨끗했다면 요청 종료 후 새 변경사항을 자동으로 커밋하고 해당 요청에 연결합니다. 요청 중 직접 만든 커밋도 계속 연결됩니다.
-- **Select Mode**: `HEAD`부터 끊김 없이 이어지는 최신 커밋 구간만 제거하거나 병합할 수 있습니다. 제거는 선택된 uncommitted 변경도 버릴 수 있고, 병합은 선택 커밋을 squash한 뒤 해당 request 링크를 새 커밋으로 옮깁니다.
-- **로컬 DB**: 모든 메타데이터는 `~/.local/share/agentgit/agentgit.sqlite3`에 저장됩니다.
-- **투명성**: 기존 작업 방식은 그대로 유지됩니다. `agentgit`은 보이지 않는 곳에서 조용히 작동합니다.
+- **기본은 수동 탐색**: 탐색 중에는 훅 설치, 전역 설정 변경, Git hook 변경, 커밋 생성, reset, request 기록 쓰기를 하지 않습니다.
+- **Select Mode**: 명시적으로 선택한 최신 커밋은 작업 트리가 깨끗하고 `HEAD`부터 끊김 없이 이어진 구간일 때만 삭제하거나 병합할 수 있습니다. 삭제는 `git reset --hard`를 사용하고, 병합은 선택 커밋을 squash합니다.
+- **트랜스크립트**: request는 Claude, Codex, Gemini의 로컬 트랜스크립트 파일에서 스캔합니다.
+- **사실만 표시**: timestamp 근사 같은 방식으로 request와 commit을 연결하지 않습니다. Git 정보는 Git에서, request 정보는 트랜스크립트 필드에서 가져옵니다.
+- **로컬 DB**: SQLite 스키마는 `~/.local/share/agentgit/agentgit.sqlite3`에 초기화될 수 있지만, request 브라우징은 트랜스크립트 스캔이 기준입니다.
 
 ## 설치 방법
 
