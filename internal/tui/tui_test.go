@@ -352,7 +352,7 @@ func TestRenderedFileCachesAreBoundedLRU(t *testing.T) {
 	}
 }
 
-func TestHeaderShowsRepoContext(t *testing.T) {
+func TestStatusBarShowsRepoContext(t *testing.T) {
 	m := model{
 		root:   "/Users/example/develop/git/agentgit",
 		branch: "main",
@@ -368,15 +368,15 @@ func TestHeaderShowsRepoContext(t *testing.T) {
 		width: 160,
 	}
 
-	header := ansi.Strip(m.viewHeader())
+	status := ansi.Strip(m.viewStatusBar())
 
-	for _, want := range []string{"PATH", "BRANCH", "HEAD", "VIEW", "TARGET", "HELP", "main", "69e67e5", "commits", "dirty 2"} {
-		if !strings.Contains(header, want) {
-			t.Fatalf("header missing %q:\n%s", want, header)
+	for _, want := range []string{"commits", "main", "69e67e5", "dirty 2", "Ctrl+P", "Alt+/"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q:\n%s", want, status)
 		}
 	}
-	if got := lipgloss.Height(m.viewHeader()); got != 5 {
-		t.Fatalf("header height = %d, want 5", got)
+	if got := lipgloss.Height(m.viewStatusBar()); got != 1 {
+		t.Fatalf("status height = %d, want 1", got)
 	}
 }
 
@@ -485,6 +485,24 @@ func TestQuestionMarkOpensHelpDialog(t *testing.T) {
 	}
 }
 
+func TestHelpDialogIncludesSearchShortcuts(t *testing.T) {
+	m := model{
+		mode:   modeFullFile,
+		files:  []string{"README.md"},
+		width:  120,
+		height: 34,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	view := ansi.Strip(updated.(model).View())
+
+	for _, want := range []string{"ctrl+p", "Files", "alt+/", "Grep", "/", "Find", "ctrl+f"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("help view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestHelpDialogClosesWithoutQuitting(t *testing.T) {
 	m := model{
 		mode:     modeDiff,
@@ -528,27 +546,27 @@ func TestCtrlCQuits(t *testing.T) {
 	}
 }
 
-func TestHeaderIncludesPersistentCommands(t *testing.T) {
+func TestStatusBarIncludesPersistentCommands(t *testing.T) {
 	m := model{
 		mode:  modeFiles,
 		width: 120,
 	}
 
-	header := ansi.Strip(m.viewHeader())
+	status := ansi.Strip(m.viewStatusBar())
 
-	for _, command := range []string{"? shortcuts", "/ search", "ctrl+c quit"} {
-		if !strings.Contains(header, command) {
-			t.Fatalf("header missing command %q:\n%s", command, header)
+	for _, command := range []string{"Ctrl+P", "Alt+/", "?"} {
+		if !strings.Contains(status, command) {
+			t.Fatalf("status missing command %q:\n%s", command, status)
 		}
 	}
 	for _, removed := range []string{"up/down", "enter/right"} {
-		if strings.Contains(header, removed) {
-			t.Fatalf("header retained footer shortcut %q:\n%s", removed, header)
+		if strings.Contains(status, removed) {
+			t.Fatalf("status retained verbose shortcut %q:\n%s", removed, status)
 		}
 	}
 }
 
-func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
+func TestStatusBarKeepsFixedDimensionsAcrossViews(t *testing.T) {
 	for _, width := range []int{24, 72, 140} {
 		for _, mode := range []mode{
 			modeCommits,
@@ -571,21 +589,18 @@ func TestHeaderRowsKeepFixedDimensionsAcrossViews(t *testing.T) {
 			}
 			m.dirEntries = []directoryEntry{{Path: "internal", DisplayName: "internal", IsDir: true}}
 
-			header := m.viewHeader()
-			lines := strings.Split(header, "\n")
-			if len(lines) != 5 {
-				t.Fatalf("width %d mode %v header rows = %d, want 5:\n%s", width, mode, len(lines), ansi.Strip(header))
+			status := m.viewStatusBar()
+			if got := lipgloss.Height(status); got != 1 {
+				t.Fatalf("width %d mode %v status height = %d, want 1:\n%s", width, mode, got, ansi.Strip(status))
 			}
-			for i, line := range lines {
-				if got := ansi.StringWidth(ansi.Strip(line)); got != m.width {
-					t.Fatalf("width %d mode %v row %d width = %d, want %d: %q", width, mode, i, got, m.width, ansi.Strip(line))
-				}
+			if got := ansi.StringWidth(ansi.Strip(status)); got != m.width {
+				t.Fatalf("width %d mode %v status width = %d, want %d: %q", width, mode, got, m.width, ansi.Strip(status))
 			}
 		}
 	}
 }
 
-func TestHeaderSeparatesRepositoryGitViewAndTarget(t *testing.T) {
+func TestStatusBarIncludesViewTargetAndCommands(t *testing.T) {
 	m := model{
 		root:   "/Users/example/develop/git/agentgit",
 		branch: "feature/header",
@@ -597,20 +612,16 @@ func TestHeaderSeparatesRepositoryGitViewAndTarget(t *testing.T) {
 		width: 100,
 	}
 
-	lines := strings.Split(ansi.Strip(m.viewHeader()), "\n")
+	status := ansi.Strip(m.viewStatusBar())
 
-	if !strings.Contains(lines[1], "PATH") || !strings.Contains(lines[1], "BRANCH") {
-		t.Fatalf("top context row missing path and branch: %q", lines[1])
-	}
-	if !strings.Contains(lines[2], "HEAD") || !strings.Contains(lines[2], "VIEW") {
-		t.Fatalf("middle context row missing head and view: %q", lines[2])
-	}
-	if !strings.Contains(lines[3], "TARGET") || !strings.Contains(lines[3], "selected commit") {
-		t.Fatalf("bottom context row missing target selection: %q", lines[3])
+	for _, want := range []string{"commits", "feature/header", "Ctrl+P"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q:\n%s", want, status)
+		}
 	}
 }
 
-func TestSlashOpensFuzzyFileSearch(t *testing.T) {
+func TestCtrlPOpensFuzzyFileSearch(t *testing.T) {
 	root := newTUITestRepo(t)
 	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
 	writeTUITestFile(t, root, "internal/hooks/hooks.go", "package hooks\n")
@@ -622,19 +633,19 @@ func TestSlashOpensFuzzyFileSearch(t *testing.T) {
 		height: 24,
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	got := updated.(model)
 
 	if !got.searchOpen {
-		t.Fatal("searchOpen = false after /")
+		t.Fatal("searchOpen = false after ctrl+p")
 	}
 	if len(got.searchResults) != 3 {
 		t.Fatalf("initial search results = %d, want 3", len(got.searchResults))
 	}
-	header := ansi.Strip(got.viewHeader())
-	for _, want := range []string{"search", "query type to filter files", "TARGET", "HELP"} {
-		if !strings.Contains(header, want) {
-			t.Fatalf("search header missing %q:\n%s", want, header)
+	status := ansi.Strip(got.viewStatusBar())
+	for _, want := range []string{"search", "query type", "Enter"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("search status missing %q:\n%s", want, status)
 		}
 	}
 
@@ -721,6 +732,206 @@ func TestSearchEscapeReturnsToPreviousView(t *testing.T) {
 	}
 	if got.mode != modeDiff {
 		t.Fatalf("mode = %v, want previous modeDiff", got.mode)
+	}
+}
+
+func TestSlashSearchesWithinCurrentFileAndJumpsToMatch(t *testing.T) {
+	m := model{
+		mode:      modeFullFile,
+		files:     []string{"internal/tui/tui.go"},
+		fileIdx:   0,
+		fullLines: []string{"package tui", "func first() {}", "const needle = true"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	got := updated.(model)
+	if !got.searchOpen {
+		t.Fatal("searchOpen = false after /")
+	}
+	if got.searchKind != searchKindCurrentFile {
+		t.Fatalf("searchKind = %v, want current file", got.searchKind)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("needle")})
+	got = updated.(model)
+	if len(got.searchResults) != 1 {
+		t.Fatalf("search results = %+v, want one match", got.searchResults)
+	}
+	if got.searchResults[0].Line != 3 {
+		t.Fatalf("match line = %d, want 3", got.searchResults[0].Line)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(model)
+	if got.searchOpen {
+		t.Fatal("search remained open after Enter")
+	}
+	if got.scroll != 2 {
+		t.Fatalf("scroll = %d, want 2", got.scroll)
+	}
+}
+
+func TestSearchOverlayKeepsCurrentFileVisible(t *testing.T) {
+	m := model{
+		mode:         modeFullFile,
+		files:        []string{"README.md"},
+		fileIdx:      0,
+		fullLines:    []string{"package tui", "const needle = true", "after"},
+		worktreeFile: true,
+		width:        90,
+		height:       24,
+	}
+	m.openCurrentFileSearch()
+	m.searchText = "needle"
+	m.updateSearchResults()
+
+	view := ansi.Strip(m.View())
+
+	for _, want := range []string{"/ needle", "matches 1", "README.md", "package tui", "const needle = true"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("search overlay view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCurrentFileSearchExposesMatchPositionsForHighlighting(t *testing.T) {
+	m := model{
+		mode:         modeFullFile,
+		files:        []string{"README.md"},
+		fileIdx:      0,
+		fullLines:    []string{"const needle = true"},
+		width:        80,
+		worktreeFile: true,
+		searchOpen:   true,
+		searchKind:   searchKindCurrentFile,
+		searchText:   "needle",
+		searchResults: []fileSearchResult{
+			{Path: "README.md", Line: 1, Text: "const needle = true", Positions: contiguousPositions(6, 6)},
+		},
+	}
+
+	positions := m.currentFileSearchPositions(1)
+	line := m.highlightCurrentFileSearchLine(m.fullLines[0], 1)
+
+	if len(positions) != 6 || positions[0] != 6 {
+		t.Fatalf("positions = %+v, want needle positions", positions)
+	}
+	if ansi.Strip(line) != "const needle = true" {
+		t.Fatalf("highlight changed visible text: %q", ansi.Strip(line))
+	}
+}
+
+func TestSearchResultHighlightPositionsPreserveLeadingSpaces(t *testing.T) {
+	text := trimSearchResultText("    needle value   ")
+	positions := contiguousPositions(4, 6)
+
+	if text != "    needle value" {
+		t.Fatalf("text = %q, want leading spaces preserved", text)
+	}
+	if !positionsMatchQuery(text, positions, "needle") {
+		t.Fatalf("positions %+v do not match %q", positions, text)
+	}
+}
+
+func TestCurrentFileSearchResultShowsOnlyLineNumber(t *testing.T) {
+	m := model{
+		searchKind: searchKindCurrentFile,
+	}
+	result := fileSearchResult{
+		Path: "internal/tui/tui.go",
+		Line: 42,
+		Text: "return needle value",
+	}
+
+	line := ansi.Strip(m.renderSearchResult(result))
+
+	for _, want := range []string{"line 42", "return needle value"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("result missing %q: %q", want, line)
+		}
+	}
+}
+
+func TestAltSlashSearchesWorktreeContentAndOpensMatch(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "alpha.txt", "one\ntwo\n")
+	writeTUITestFile(t, root, "src/beta.txt", "before\nneedle here\nafter\n")
+	m := model{
+		root: root,
+		mode: modeCommits,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}, Alt: true})
+	got := updated.(model)
+	if !got.searchOpen {
+		t.Fatal("searchOpen = false after alt+/")
+	}
+	if got.searchKind != searchKindWorktreeContent {
+		t.Fatalf("searchKind = %v, want worktree content", got.searchKind)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("needle")})
+	got = updated.(model)
+	if len(got.searchResults) != 1 {
+		t.Fatalf("search results = %+v, want one match", got.searchResults)
+	}
+	if got.searchResults[0].Path != "src/beta.txt" || got.searchResults[0].Line != 2 {
+		t.Fatalf("match = %+v, want src/beta.txt:2", got.searchResults[0])
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(model)
+	if got.searchOpen {
+		t.Fatal("search remained open after Enter")
+	}
+	if got.mode != modeFullFile || !got.worktreeFile {
+		t.Fatalf("mode/worktree = %v/%v, want full file worktree", got.mode, got.worktreeFile)
+	}
+	if len(got.files) != 1 || got.files[0] != "src/beta.txt" {
+		t.Fatalf("opened files = %+v, want src/beta.txt", got.files)
+	}
+	if got.scroll != 1 {
+		t.Fatalf("scroll = %d, want 1", got.scroll)
+	}
+}
+
+func TestSearchAcceptsSpacesInQuery(t *testing.T) {
+	m := model{searchOpen: true}
+
+	updated, _ := m.updateSearch(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	got := updated.(model)
+	updated, _ = got.updateSearch(tea.KeyMsg{Type: tea.KeySpace})
+	got = updated.(model)
+	updated, _ = got.updateSearch(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("world")})
+	got = updated.(model)
+
+	if got.searchText != "hello world" {
+		t.Fatalf("searchText = %q, want hello world", got.searchText)
+	}
+}
+
+func TestWorktreeContentSearchResultShowsBasenameAndText(t *testing.T) {
+	m := model{
+		searchKind: searchKindWorktreeContent,
+		width:      90,
+	}
+	result := fileSearchResult{
+		Path:      "internal/tui/tui.go",
+		Line:      42,
+		Text:      "return needle value",
+		Positions: contiguousPositions(7, 6),
+	}
+
+	line := ansi.Strip(m.renderSearchResult(result))
+
+	if !strings.Contains(line, "tui.go") {
+		t.Fatalf("result missing basename:\n%s", line)
+	}
+	if strings.Contains(line, "internal/tui/tui.go") {
+		t.Fatalf("result includes full path:\n%s", line)
+	}
+	if !strings.Contains(line, "return needle value") {
+		t.Fatalf("result missing matched text:\n%s", line)
 	}
 }
 
@@ -907,6 +1118,23 @@ func TestSearchBodyRendersOnlyVisibleResults(t *testing.T) {
 	}
 }
 
+func TestSearchBodyUsesAvailableWidth(t *testing.T) {
+	m := model{
+		searchOpen: true,
+		width:      160,
+	}
+
+	body := ansi.Strip(m.viewSearchBody(7))
+	lines := strings.Split(body, "\n")
+
+	if len(lines) == 0 {
+		t.Fatal("search body rendered no lines")
+	}
+	if got, want := ansi.StringWidth(lines[0]), m.frameInnerWidth(); got != want {
+		t.Fatalf("search body width = %d, want %d:\n%s", got, want, body)
+	}
+}
+
 func TestSearchViewShowsCenteredDialogWithinFrame(t *testing.T) {
 	root := newTUITestRepo(t)
 	writeTUITestFile(t, root, "internal/tui/tui.go", "package tui\n")
@@ -923,14 +1151,14 @@ func TestSearchViewShowsCenteredDialogWithinFrame(t *testing.T) {
 
 	view := ansi.Strip(m.View())
 
-	for _, want := range []string{"PATH", "VIEW", "/ tui", "matches", "internal/tui/tui.go"} {
+	for _, want := range []string{"/ tui", "matches", "internal/tui/tui.go"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("search view missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestFrameUsesFormerFooterRowForContent(t *testing.T) {
+func TestFrameIncludesBottomStatusBar(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
 		files:   []string{"file.go"},
@@ -948,8 +1176,8 @@ func TestFrameUsesFormerFooterRowForContent(t *testing.T) {
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("frame height = %d, want %d", got, m.height)
 	}
-	if strings.Contains(ansi.Strip(view), "ctrl+c quit") {
-		t.Fatalf("frame still contains footer shortcuts:\n%s", ansi.Strip(view))
+	if !strings.Contains(ansi.Strip(view), "Full") {
+		t.Fatalf("frame missing status commands:\n%s", ansi.Strip(view))
 	}
 }
 

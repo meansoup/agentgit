@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -46,48 +47,63 @@ const (
 	diffSplit
 )
 
+type searchKind int
+
+const (
+	searchKindFiles searchKind = iota
+	searchKindCurrentFile
+	searchKindWorktreeContent
+)
+
 type model struct {
-	root          string
-	branch        string
-	head          string
-	limit         int
-	commits       []git.Commit
-	requests      []transcript.Request
-	files         []string
-	diffLines     []string
-	fullLines     []string
-	dirEntries    []directoryEntry
-	expanded      map[string]bool
-	fileCache     map[string][]string
-	diffCache     map[string][]string
-	diffCacheKeys []string
-	fullCache     map[string][]string
-	fullCacheKeys []string
-	selected      map[string]bool
-	mode          mode
-	pending       selectAction
-	fileReturn    mode
-	requestReturn mode
-	requestDrawer bool
-	worktreeFile  bool
-	diffMode      diffMode
-	commitIdx     int
-	dirIdx        int
-	requestIdx    int
-	fileIdx       int
-	scroll        int
-	width         int
-	height        int
-	err           error
-	notice        string
-	helpOpen      bool
-	lineNums      bool
-	wrapLines     bool
-	searchOpen    bool
-	searchText    string
-	searchIdx     int
-	searchFiles   []string
-	searchResults []fileSearchResult
+	root               string
+	branch             string
+	head               string
+	limit              int
+	commits            []git.Commit
+	requests           []transcript.Request
+	requestsLoading    bool
+	requestsLoadSeq    int
+	requestsCmdContext context.Context
+	requestsCmdCancel  context.CancelFunc
+	requestsUpdatedAt  time.Time
+	requestsCache      *transcript.Cache
+	files              []string
+	diffLines          []string
+	fullLines          []string
+	dirEntries         []directoryEntry
+	expanded           map[string]bool
+	fileCache          map[string][]string
+	diffCache          map[string][]string
+	diffCacheKeys      []string
+	fullCache          map[string][]string
+	fullCacheKeys      []string
+	selected           map[string]bool
+	mode               mode
+	pending            selectAction
+	fileReturn         mode
+	requestReturn      mode
+	requestDrawer      bool
+	worktreeFile       bool
+	diffMode           diffMode
+	commitIdx          int
+	dirIdx             int
+	requestIdx         int
+	fileIdx            int
+	scroll             int
+	width              int
+	height             int
+	err                error
+	notice             string
+	helpOpen           bool
+	lineNums           bool
+	wrapLines          bool
+	searchOpen         bool
+	searchKind         searchKind
+	searchText         string
+	searchIdx          int
+	searchFiles        []string
+	searchResults      []fileSearchResult
 }
 
 const renderedFileCacheLimit = 50
@@ -96,8 +112,17 @@ type imageOpenMsg struct {
 	err error
 }
 
+type requestsLoadedMsg struct {
+	seq      int
+	requests []transcript.Request
+	err      error
+	at       time.Time
+}
+
 type fileSearchResult struct {
 	Path      string
+	Line      int
+	Text      string
 	Positions []int
 	Score     int
 }
@@ -127,32 +152,22 @@ const (
 )
 
 var (
-	hashStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	providerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	requestStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	markerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	fileStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	dirStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
-	addLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
-	delLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
-	hunkStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	cursorStyle     = lipgloss.NewStyle().Reverse(true)
-	titleStyle      = lipgloss.NewStyle().Bold(true)
-	contextStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("0"))
-	viewStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
-	commandStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7"))
-	contextLabel    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("14")).Padding(0, 1)
-	viewLabel       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
-	commandLabel    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
-	statusAltStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
-	keyStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
-	mutedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	contextBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("14"))
-	panelBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("8"))
+	hashStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	providerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	requestStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	dirStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
+	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
+	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	cursorStyle    = lipgloss.NewStyle().Reverse(true)
+	titleStyle     = lipgloss.NewStyle().Bold(true)
+	commandStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7"))
+	commandLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
+	statusAltStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("13")).Padding(0, 1)
+	keyStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
+	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
 var (
@@ -170,25 +185,26 @@ func Run(root string, limit int) error {
 	if _, err := store.Init(); err != nil {
 		return err
 	}
-	requests, err := transcript.RequestsByRepo(root)
-	if err != nil {
-		return err
-	}
 	if !isTTY(os.Stdout) || !isTTY(os.Stdin) {
 		return PrintStatic(os.Stdout, commits)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	m := model{
-		root:      root,
-		branch:    git.Branch(root),
-		head:      git.ShortHead(root),
-		limit:     limit,
-		commits:   commits,
-		requests:  requests,
-		fileCache: map[string][]string{},
-		diffCache: map[string][]string{},
-		fullCache: map[string][]string{},
-		expanded:  map[string]bool{},
-		selected:  map[string]bool{},
+		root:               root,
+		branch:             git.Branch(root),
+		head:               git.ShortHead(root),
+		limit:              limit,
+		commits:            commits,
+		requestsLoading:    true,
+		requestsLoadSeq:    1,
+		requestsCmdContext: ctx,
+		requestsCmdCancel:  cancel,
+		requestsCache:      transcript.NewCache(),
+		fileCache:          map[string][]string{},
+		diffCache:          map[string][]string{},
+		fullCache:          map[string][]string{},
+		expanded:           map[string]bool{},
+		selected:           map[string]bool{},
 	}
 	m.loadCommitFiles()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -265,7 +281,22 @@ func PrintStatic(w io.Writer, commits []git.Commit) error {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.requestsLoading && m.requestsCmdContext != nil {
+		return m.loadRequestsCmd(m.requestsCmdContext, m.requestsLoadSeq)
+	}
 	return nil
+}
+
+func (m model) loadRequestsCmd(ctx context.Context, seq int) tea.Cmd {
+	root := m.root
+	cache := m.requestsCache
+	return func() tea.Msg {
+		requests, err := transcript.RequestsByRepoContext(ctx, root, cache)
+		if errors.Is(err, context.Canceled) {
+			return requestsLoadedMsg{seq: seq, err: err, at: time.Now()}
+		}
+		return requestsLoadedMsg{seq: seq, requests: requests, err: err, at: time.Now()}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -283,14 +314,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.helpOpen = false
 				return m, nil
 			case "ctrl+c":
-				return m, tea.Quit
+				return m, m.quitCmd()
 			default:
 				return m, nil
 			}
 		}
 		switch msg.String() {
 		case "ctrl+c":
-			return m, tea.Quit
+			return m, m.quitCmd()
 		case "esc":
 			if m.mode == modeSelect && m.pending != selectActionNone {
 				m.cancelPendingSelectAction()
@@ -362,7 +393,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "r":
 			m.clearNotice()
-			m.refresh()
+			return m, m.refresh()
 		case "v":
 			m.toggleRequestDrawer()
 		case "n":
@@ -386,33 +417,77 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "y":
 			if m.mode == modeSelect {
-				m.confirmSelectAction()
+				return m, m.confirmSelectAction()
 			}
 		case "?":
 			m.helpOpen = true
-		case "/":
+		case "ctrl+p":
 			m.openSearch()
+		case "/":
+			m.openCurrentFileSearch()
+		case "ctrl+f":
+			m.openCurrentFileSearch()
+		case "ctrl+shift+f", "alt+/":
+			m.openWorktreeContentSearch()
 		}
 	case imageOpenMsg:
 		if msg.err != nil {
 			m.err = msg.err
 		}
+	case requestsLoadedMsg:
+		if msg.seq != m.requestsLoadSeq {
+			return m, nil
+		}
+		m.requestsLoading = false
+		m.requestsCmdContext = nil
+		m.requestsCmdCancel = nil
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.notice = "request load failed: " + msg.err.Error()
+			return m, nil
+		}
+		selectedRequestID := ""
+		if len(m.requests) > 0 && m.requestIdx >= 0 && m.requestIdx < len(m.requests) {
+			selectedRequestID = m.requests[m.requestIdx].ID
+		}
+		m.requests = msg.requests
+		m.requestsUpdatedAt = msg.at
+		m.requestIdx = 0
+		for i, req := range m.requests {
+			if req.ID == selectedRequestID {
+				m.requestIdx = i
+				break
+			}
+		}
 	}
 	return m, nil
+}
+
+func (m *model) quitCmd() tea.Cmd {
+	if m.requestsCmdCancel != nil {
+		m.requestsCmdCancel()
+		m.requestsCmdCancel = nil
+		m.requestsCmdContext = nil
+	}
+	return tea.Quit
 }
 
 func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case "esc":
 		m.closeSearch()
 	case "enter":
 		m.selectSearchResult()
 	case "up":
 		m.searchIdx = clamp(m.searchIdx-1, 0, len(m.searchResults)-1)
+		m.syncCurrentSearchScroll()
 	case "down":
 		m.searchIdx = clamp(m.searchIdx+1, 0, len(m.searchResults)-1)
+		m.syncCurrentSearchScroll()
 	case "backspace":
 		runes := []rune(m.searchText)
 		if len(runes) > 0 {
@@ -421,6 +496,9 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "ctrl+u":
 		m.searchText = ""
+		m.updateSearchResults()
+	case " ":
+		m.searchText += " "
 		m.updateSearchResults()
 	default:
 		if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
@@ -438,6 +516,34 @@ func (m *model) openSearch() {
 		return
 	}
 	m.searchOpen = true
+	m.searchKind = searchKindFiles
+	m.searchText = ""
+	m.searchIdx = 0
+	m.searchFiles = files
+	m.updateSearchResults()
+}
+
+func (m *model) openCurrentFileSearch() {
+	if !m.currentFileSearchAvailable() {
+		m.notice = "open a diff or full file before searching within a file"
+		return
+	}
+	m.searchOpen = true
+	m.searchKind = searchKindCurrentFile
+	m.searchText = ""
+	m.searchIdx = 0
+	m.searchFiles = nil
+	m.updateSearchResults()
+}
+
+func (m *model) openWorktreeContentSearch() {
+	files, err := git.WorktreeFiles(m.root)
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.searchOpen = true
+	m.searchKind = searchKindWorktreeContent
 	m.searchText = ""
 	m.searchIdx = 0
 	m.searchFiles = files
@@ -446,6 +552,7 @@ func (m *model) openSearch() {
 
 func (m *model) closeSearch() {
 	m.searchOpen = false
+	m.searchKind = searchKindFiles
 	m.searchText = ""
 	m.searchIdx = 0
 	m.searchFiles = nil
@@ -453,15 +560,40 @@ func (m *model) closeSearch() {
 }
 
 func (m *model) updateSearchResults() {
-	m.searchResults = fuzzyFileMatches(m.searchFiles, m.searchText)
+	switch m.searchKind {
+	case searchKindCurrentFile:
+		m.searchResults = m.currentFileContentMatches(m.searchText)
+	case searchKindWorktreeContent:
+		m.searchResults = m.worktreeContentMatches(m.searchText)
+	default:
+		m.searchResults = fuzzyFileMatches(m.searchFiles, m.searchText)
+	}
 	m.searchIdx = clamp(m.searchIdx, 0, len(m.searchResults)-1)
+	m.syncCurrentSearchScroll()
+}
+
+func (m *model) syncCurrentSearchScroll() {
+	if !m.searchOpen || m.searchKind != searchKindCurrentFile || len(m.searchResults) == 0 || m.searchIdx < 0 || m.searchIdx >= len(m.searchResults) {
+		return
+	}
+	m.scroll = max(0, m.searchResults[m.searchIdx].Line-4)
 }
 
 func (m *model) selectSearchResult() {
 	if len(m.searchResults) == 0 || m.searchIdx < 0 || m.searchIdx >= len(m.searchResults) {
 		return
 	}
-	path := m.searchResults[m.searchIdx].Path
+	result := m.searchResults[m.searchIdx]
+	if m.searchKind == searchKindCurrentFile {
+		m.scroll = max(0, result.Line-1)
+		m.closeSearch()
+		return
+	}
+	if m.searchKind == searchKindWorktreeContent {
+		m.openWorktreeSearchResult(result)
+		return
+	}
+	path := result.Path
 	m.closeSearch()
 	m.loadDirectoryEntries()
 	if m.err != nil {
@@ -488,7 +620,10 @@ func (m model) View() string {
 	}
 	content, focusLine := m.contentView()
 	if m.width <= 0 || m.height <= 0 {
-		base := m.viewHeaderAtWidth(120) + "\n\n" + content
+		base := content
+		if status := m.viewStatusBarAtWidth(120); status != "" {
+			base = strings.TrimRight(base, "\n") + "\n" + status
+		}
 		if m.helpOpen {
 			return base + "\n\n" + m.viewHelpDialog(120, 0)
 		}
@@ -522,9 +657,201 @@ func (m model) contentView() (string, int) {
 	}
 }
 
-func (m model) viewFrame(content string, focusLine int) string {
-	header := m.viewHeader()
+func (m model) currentFileSearchAvailable() bool {
+	if m.mode != modeDiff && m.mode != modeFullFile {
+		return false
+	}
+	return len(m.currentSearchLines()) > 0
+}
 
+func (m model) currentSearchPath() string {
+	if len(m.files) == 0 || m.fileIdx < 0 || m.fileIdx >= len(m.files) {
+		return ""
+	}
+	return m.files[m.fileIdx]
+}
+
+func (m model) currentSearchLines() []string {
+	switch m.mode {
+	case modeDiff:
+		return m.visibleDiffLines()
+	case modeFullFile:
+		return m.fullLines
+	default:
+		return nil
+	}
+}
+
+func (m model) currentFileContentMatches(query string) []fileSearchResult {
+	path := m.currentSearchPath()
+	if path == "" {
+		return nil
+	}
+	return contentLineMatches(path, m.currentSearchLines(), query)
+}
+
+func (m model) worktreeContentMatches(query string) []fileSearchResult {
+	if strings.TrimSpace(query) == "" {
+		return nil
+	}
+	var results []fileSearchResult
+	for _, path := range m.searchFiles {
+		data, err := os.ReadFile(filepath.Join(m.root, filepath.FromSlash(path)))
+		if err != nil || bytes.Contains(data, []byte{0}) {
+			continue
+		}
+		results = append(results, contentLineMatches(path, splitContentLines(string(data)), query)...)
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Path != results[j].Path {
+			return results[i].Path < results[j].Path
+		}
+		return results[i].Line < results[j].Line
+	})
+	return results
+}
+
+func (m *model) openWorktreeSearchResult(result fileSearchResult) {
+	m.closeSearch()
+	m.files = []string{result.Path}
+	m.fileIdx = 0
+	m.mode = modeFullFile
+	m.fileReturn = modeDirectories
+	m.worktreeFile = true
+	m.scroll = max(0, result.Line-1)
+	m.loadWorktreeFile()
+}
+
+func contentLineMatches(path string, lines []string, query string) []fileSearchResult {
+	if strings.TrimSpace(query) == "" {
+		return nil
+	}
+	lowerQuery := []rune(strings.ToLower(query))
+	results := make([]fileSearchResult, 0)
+	for i, line := range lines {
+		plain := ansi.Strip(line)
+		lowerLine := []rune(strings.ToLower(plain))
+		index := runeSliceIndex(lowerLine, lowerQuery)
+		if index < 0 {
+			continue
+		}
+		results = append(results, fileSearchResult{
+			Path:      path,
+			Line:      i + 1,
+			Text:      plain,
+			Positions: contiguousPositions(index, len(lowerQuery)),
+			Score:     1,
+		})
+	}
+	return results
+}
+
+func runeSliceIndex(haystack, needle []rune) int {
+	if len(needle) == 0 || len(needle) > len(haystack) {
+		return -1
+	}
+	for i := 0; i <= len(haystack)-len(needle); i++ {
+		matched := true
+		for j, char := range needle {
+			if haystack[i+j] != char {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
+}
+
+func splitContentLines(content string) []string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.TrimSuffix(content, "\n")
+	if content == "" {
+		return nil
+	}
+	return strings.Split(content, "\n")
+}
+
+func contiguousPositions(start, length int) []int {
+	positions := make([]int, 0, length)
+	for i := 0; i < length; i++ {
+		positions = append(positions, start+i)
+	}
+	return positions
+}
+
+func renderContentSearchText(text string, positions []int) string {
+	return renderMatchedText(text, positions)
+}
+
+func renderMatchedText(text string, positions []int) string {
+	if len(positions) == 0 {
+		return text
+	}
+	matched := make(map[int]bool, len(positions))
+	for _, position := range positions {
+		matched[position] = true
+	}
+	var b strings.Builder
+	for i, char := range []rune(text) {
+		value := string(char)
+		if matched[i] {
+			b.WriteString(markerStyle.Bold(true).Render(value))
+		} else {
+			b.WriteString(value)
+		}
+	}
+	return b.String()
+}
+
+func (m model) currentFileSearchPositions(line int) []int {
+	if !m.searchOpen || m.searchKind != searchKindCurrentFile {
+		return nil
+	}
+	if m.searchText == "" {
+		return nil
+	}
+	for _, result := range m.searchResults {
+		if result.Line == line {
+			return result.Positions
+		}
+	}
+	return nil
+}
+
+func (m model) highlightCurrentFileSearchLine(line string, lineNumber int) string {
+	positions := m.currentFileSearchPositions(lineNumber)
+	if len(positions) == 0 {
+		return line
+	}
+	plain := ansi.Strip(line)
+	if !positionsMatchQuery(plain, positions, m.searchText) {
+		index := runeSliceIndex([]rune(strings.ToLower(plain)), []rune(strings.ToLower(m.searchText)))
+		if index < 0 {
+			return line
+		}
+		positions = contiguousPositions(index, len([]rune(m.searchText)))
+	}
+	return renderMatchedText(plain, positions)
+}
+
+func positionsMatchQuery(text string, positions []int, query string) bool {
+	textRunes := []rune(strings.ToLower(text))
+	queryRunes := []rune(strings.ToLower(query))
+	if len(positions) != len(queryRunes) {
+		return false
+	}
+	for i, position := range positions {
+		if position < 0 || position >= len(textRunes) || textRunes[position] != queryRunes[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (m model) viewFrame(content string, focusLine int) string {
 	var staticTop string
 	if m.mode == modeCommits {
 		staticTop = m.viewCommitDetailsPreview()
@@ -537,8 +864,8 @@ func (m model) viewFrame(content string, focusLine int) string {
 	}
 
 	topHeight := lipgloss.Height(staticTop)
-	headerHeight := lipgloss.Height(header)
-	frameHeight := max(0, m.height-headerHeight)
+	statusHeight := 1
+	frameHeight := max(0, m.height-statusHeight)
 	drawerHeight := 0
 	if m.requestDrawer && m.mode != modeRequest {
 		drawerHeight = m.requestDrawerHeight(frameHeight)
@@ -546,7 +873,19 @@ func (m model) viewFrame(content string, focusLine int) string {
 	bodyHeight := max(0, frameHeight-2-topHeight-drawerHeight)
 	var body string
 	if m.searchOpen {
-		body = m.viewSearchBody(bodyHeight)
+		searchHeight := m.searchOverlayHeight(bodyHeight)
+		contentHeight := max(0, bodyHeight-searchHeight)
+		searchBody := m.viewSearchBody(searchHeight)
+		var contentBody string
+		if m.mode == modeFiles {
+			contentBody = m.viewFilesBody(contentHeight)
+		} else {
+			contentBody = m.viewBody(content, contentHeight, focusLine)
+		}
+		body = strings.TrimRight(searchBody, "\n")
+		if contentHeight > 0 {
+			body += "\n" + contentBody
+		}
 	} else if m.mode == modeFiles {
 		body = m.viewFilesBody(bodyHeight)
 	} else {
@@ -559,42 +898,56 @@ func (m model) viewFrame(content string, focusLine int) string {
 		}
 		body += m.viewRequestDrawer(drawerHeight)
 	}
-	return header + "\n" + m.renderPanelFrame(staticTop, body, frameHeight)
+	return m.renderPanelFrame(staticTop, body, frameHeight) + "\n" + m.viewStatusBar()
 }
 
-func (m model) viewHeader() string {
-	return m.viewHeaderAtWidth(m.width)
+func (m model) searchOverlayHeight(available int) int {
+	if available <= 0 {
+		return 0
+	}
+	if available < 5 {
+		return available
+	}
+	maxHeight := 10
+	if m.searchKind == searchKindCurrentFile {
+		maxHeight = 7
+	}
+	return clamp(available/3, 5, min(maxHeight, available))
 }
 
-func (m model) viewHeaderAtWidth(width int) string {
+func (m model) viewStatusBar() string {
+	return m.viewStatusBarAtWidth(m.width)
+}
+
+func (m model) viewStatusBarAtWidth(width int) string {
 	if width <= 0 {
-		return strings.Join([]string{
-			"CONTEXT",
-			"path " + m.repositoryContextLine(120),
-			"git  " + m.gitContextLine(),
-			"view " + m.viewContextLine(),
-		}, "\n")
+		width = 120
 	}
-	innerWidth := max(1, width-2)
-	rows := []string{
-		m.headerContextRow(innerWidth, "PATH", m.repositoryContextLine(width), "BRANCH", fmt.Sprintf("%s  dirty %d", emptyFallback(m.branch, "unknown"), m.dirtyFileCount())),
-		m.headerContextRow(innerWidth, "HEAD", emptyFallback(m.head, "unknown"), "VIEW", m.viewStatusLine()),
-		m.headerContextRow(innerWidth, "TARGET", m.targetContextLine(), "HELP", "? shortcuts  / search  ctrl+c quit"),
+	left := m.viewContextLine()
+	target := m.targetContextLine()
+	if target != "" {
+		left += "  " + target
 	}
-	return renderContextBox(width, rows)
+	center := fmt.Sprintf("%s  %s", emptyFallback(m.branch, "unknown"), emptyFallback(m.head, "unknown"))
+	if dirty := m.dirtyFileCount(); dirty > 0 {
+		center += fmt.Sprintf("  dirty %d", dirty)
+	}
+	right := m.commandContextLine()
+	return renderStatusBar(width, left, center, right)
 }
 
 func (m model) viewSearchBody(height int) string {
 	if height <= 0 {
 		return ""
 	}
-	width := clamp(m.frameInnerWidth()-8, 32, 88)
-	if width > m.frameInnerWidth() {
-		width = m.frameInnerWidth()
+	frameWidth := m.frameInnerWidth()
+	width := max(1, frameWidth-2)
+	if frameWidth < 48 {
+		width = frameWidth
 	}
-	dialogHeight := clamp(height-2, 5, 12)
+	dialogHeight := clamp(height-2, 3, 10)
 	dialog := m.viewSearchDialog(width, dialogHeight)
-	return lipgloss.Place(m.frameInnerWidth(), height, lipgloss.Center, lipgloss.Center, dialog)
+	return lipgloss.Place(m.frameInnerWidth(), height, lipgloss.Center, lipgloss.Top, dialog)
 }
 
 func (m model) viewSearchDialog(width, height int) string {
@@ -603,7 +956,7 @@ func (m model) viewSearchDialog(width, height int) string {
 	}
 	innerWidth := max(1, width-4)
 	rows := []string{
-		truncateVisible("/ "+emptyFallback(m.searchText, ""), innerWidth),
+		truncateVisible(m.searchPrompt()+" "+emptyFallback(m.searchText, ""), innerWidth),
 		mutedStyle.Render(truncateVisible(fmt.Sprintf("matches %d", len(m.searchResults)), innerWidth)),
 		mutedStyle.Render(strings.Repeat("─", innerWidth)),
 	}
@@ -627,7 +980,7 @@ func (m model) viewSearchDialog(width, height int) string {
 	end := min(len(m.searchResults), start+listHeight)
 	for i := start; i < end; i++ {
 		result := m.searchResults[i]
-		line := renderFuzzyPath(result)
+		line := m.renderSearchResult(result)
 		if i == m.searchIdx {
 			line = cursorStyle.Render(line)
 		}
@@ -642,6 +995,93 @@ func (m model) viewSearchDialog(width, height int) string {
 		Padding(0, 1).
 		Width(width).
 		Render(strings.Join(rows, "\n"))
+}
+
+func (m model) searchPrompt() string {
+	switch m.searchKind {
+	case searchKindCurrentFile:
+		return "/"
+	case searchKindWorktreeContent:
+		return "alt+/"
+	default:
+		return "/"
+	}
+}
+
+func (m model) searchTitle() string {
+	switch m.searchKind {
+	case searchKindCurrentFile:
+		return "file search"
+	case searchKindWorktreeContent:
+		return "content search"
+	default:
+		return "file picker"
+	}
+}
+
+func (m model) searchContextTitle() string {
+	if m.searchKind == searchKindFiles {
+		return "search"
+	}
+	return m.searchTitle()
+}
+
+func (m model) emptySearchHint() string {
+	switch m.searchKind {
+	case searchKindCurrentFile:
+		return "type to search this file"
+	case searchKindWorktreeContent:
+		return "type to search all files"
+	default:
+		return "type to filter files"
+	}
+}
+
+func (m model) renderSearchResult(result fileSearchResult) string {
+	if result.Line <= 0 {
+		return renderFuzzyPath(result)
+	}
+	if m.searchKind == searchKindWorktreeContent {
+		return m.renderWorktreeContentSearchResult(result)
+	}
+	if m.searchKind == searchKindCurrentFile {
+		return m.renderCurrentFileSearchResult(result)
+	}
+	location := fileStyle.Render(fmt.Sprintf("%s:%d", result.Path, result.Line))
+	text := trimSearchResultText(result.Text)
+	if text == "" {
+		return location
+	}
+	return location + mutedStyle.Render("  ") + renderContentSearchText(text, result.Positions)
+}
+
+func (m model) renderCurrentFileSearchResult(result fileSearchResult) string {
+	line := fileStyle.Render(fmt.Sprintf("line %d", result.Line))
+	text := trimSearchResultText(result.Text)
+	if text == "" {
+		return line
+	}
+	width := max(1, m.frameInnerWidth()-8)
+	lineWidth := clamp(len(fmt.Sprintf("line %d", result.Line)), 6, 12)
+	textWidth := max(1, width-lineWidth-3)
+	return padPlain(line, lineWidth) + mutedStyle.Render("  ") + truncateVisible(renderContentSearchText(text, result.Positions), textWidth)
+}
+
+func (m model) renderWorktreeContentSearchResult(result fileSearchResult) string {
+	width := max(1, m.frameInnerWidth()-8)
+	nameWidth := clamp(width/3, 12, 28)
+	textWidth := max(1, width-nameWidth-3)
+	name := filepath.Base(filepath.FromSlash(result.Path))
+	location := fileStyle.Render(padPlain(truncateVisible(name, nameWidth), nameWidth))
+	text := trimSearchResultText(result.Text)
+	if text == "" {
+		return location
+	}
+	return location + mutedStyle.Render("  ") + truncateVisible(renderContentSearchText(text, result.Positions), textWidth)
+}
+
+func trimSearchResultText(text string) string {
+	return strings.TrimRight(text, " \t\r\n")
 }
 
 func fuzzyFileMatches(files []string, query string) []fileSearchResult {
@@ -746,70 +1186,32 @@ func renderFuzzyPath(result fileSearchResult) string {
 	return b.String()
 }
 
-func renderHeaderRow(width int, label, content string, rowStyle, labelStyle lipgloss.Style) string {
+func renderStatusBar(width int, left, center, right string) string {
 	if width <= 0 {
-		return label + "  " + content
+		return strings.Join(nonEmptyParts([]string{left, center, right}), "  ")
 	}
-	labelCell := labelStyle.Width(12).Render(label)
-	gap := 1
-	contentWidth := max(0, width-lipgloss.Width(labelCell)-gap)
-	line := labelCell
-	if contentWidth > 0 {
-		line += " " + truncateVisible(content, contentWidth)
+	if width < 40 {
+		return commandStyle.Width(width).Render(truncateVisible(left, width))
 	}
-	return rowStyle.Width(width).Render(line)
+	leftWidth := max(8, width/4)
+	rightWidth := max(12, width/2)
+	centerWidth := max(0, width-leftWidth-rightWidth)
+	line := truncateVisible(left, leftWidth)
+	line = padPlain(line, leftWidth)
+	line += truncateVisible(center, centerWidth)
+	line = padPlain(line, leftWidth+centerWidth)
+	line += truncateVisible(right, rightWidth)
+	return commandStyle.Width(width).Render(frameLine(line, width))
 }
 
-func (m model) headerContextRow(width int, leftLabel, leftValue, rightLabel, rightValue string) string {
-	if width <= 0 {
-		return leftLabel + " " + leftValue + "  " + rightLabel + " " + rightValue
+func nonEmptyParts(parts []string) []string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			filtered = append(filtered, part)
+		}
 	}
-	if width < 36 {
-		line := fmt.Sprintf("%s %s", leftLabel, leftValue)
-		return padPlain(truncateVisible(line, width), width)
-	}
-	gap := 3
-	leftWidth := max(10, width/2-gap/2)
-	rightWidth := max(8, width-leftWidth-gap)
-	left := formatContextCell(leftLabel, leftValue, leftWidth)
-	right := formatContextCell(rightLabel, rightValue, rightWidth)
-	return left + strings.Repeat(" ", gap) + right
-}
-
-func renderContextBox(width int, rows []string) string {
-	if width <= 0 {
-		return strings.Join(rows, "\n")
-	}
-	innerWidth := max(1, width-2)
-	var b strings.Builder
-	b.WriteString(mutedStyle.Render("╭"))
-	b.WriteString(mutedStyle.Render(strings.Repeat("─", innerWidth)))
-	b.WriteString(mutedStyle.Render("╮"))
-	for _, row := range rows {
-		b.WriteByte('\n')
-		b.WriteString(mutedStyle.Render("│"))
-		b.WriteString(frameLine(row, innerWidth))
-		b.WriteString(mutedStyle.Render("│"))
-	}
-	b.WriteByte('\n')
-	b.WriteString(mutedStyle.Render("╰"))
-	b.WriteString(mutedStyle.Render(strings.Repeat("─", innerWidth)))
-	b.WriteString(mutedStyle.Render("╯"))
-	return b.String()
-}
-
-func formatContextCell(label, value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	labelWidth := min(8, max(4, len(label)))
-	prefix := contextLabel.Width(labelWidth + 2).Render(label)
-	contentWidth := max(0, width-lipgloss.Width(prefix)-1)
-	line := prefix
-	if contentWidth > 0 {
-		line += " " + truncateVisible(value, contentWidth)
-	}
-	return padPlain(truncateVisible(line, width), width)
+	return filtered
 }
 
 func (m model) repositoryContextLine(width int) string {
@@ -829,9 +1231,9 @@ func (m model) viewContextLine() string {
 	if m.searchOpen {
 		query := m.searchText
 		if query == "" {
-			query = "type to filter files"
+			query = m.emptySearchHint()
 		}
-		return fmt.Sprintf("search  query %s  matches %d", query, len(m.searchResults))
+		return fmt.Sprintf("%s  query %s  matches %d", m.searchContextTitle(), query, len(m.searchResults))
 	}
 	wrap := ""
 	if m.mode == modeDiff || m.mode == modeFullFile || m.mode == modeRequest {
@@ -840,20 +1242,16 @@ func (m model) viewContextLine() string {
 	return fmt.Sprintf("%s  diff %s%s", m.modeName(), m.diffModeName(), wrap)
 }
 
-func (m model) viewStatusLine() string {
-	label := fmt.Sprintf("commits %d", len(m.visibleCommits()))
-	if m.requestDrawer || m.mode == modeRequest {
-		label = fmt.Sprintf("requests %d", len(m.requests))
-	}
-	return fmt.Sprintf("%s  %s", m.viewContextLine(), label)
-}
-
 func (m model) targetContextLine() string {
 	if m.searchOpen {
 		if len(m.searchResults) == 0 || m.searchIdx < 0 || m.searchIdx >= len(m.searchResults) {
-			return "no matching files"
+			return "no matches"
 		}
-		return m.searchResults[m.searchIdx].Path
+		result := m.searchResults[m.searchIdx]
+		if result.Line > 0 {
+			return fmt.Sprintf("%s:%d", result.Path, result.Line)
+		}
+		return result.Path
 	}
 	return m.selectionTitle()
 }
@@ -867,7 +1265,7 @@ func (m model) frameInnerWidth() int {
 
 func (m model) panelTitle() string {
 	if m.searchOpen {
-		return " Search "
+		return " " + titleCase(m.searchTitle()) + " "
 	}
 	switch m.mode {
 	case modeCommits:
@@ -946,27 +1344,27 @@ func centerTitle(title string, width int) string {
 
 func (m model) commandContextLine() string {
 	if m.searchOpen {
-		return "[Enter] Locate  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
+		return "[Enter] Open  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
 	}
 	switch m.mode {
 	case modeCommits:
-		return "[s] Select  [w] Wrap  [/] Search  [?] Help"
+		return "[s] Select  [w] Wrap  [Ctrl+P] Files  [Alt+/] Grep  [?] Help"
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return "[y] Confirm  [n/Esc] Cancel  [?] Help"
 		}
 		return "[Space] Select  [x] Delete  [m] Merge  [s] Back  [?] Help"
 	case modeDiff:
-		return "[w] Wrap  [l] Lines  [f] Full file  [/] Search  [?] Help"
+		return "[w] Wrap  [l] Lines  [f] Full file  [/] Find  [Ctrl+P] Files  [Alt+/] Grep"
 	case modeFullFile:
 		if m.worktreeFile {
-			return "[w] Wrap  [l] Lines  [/] Search  [?] Help"
+			return "[w] Wrap  [l] Lines  [/] Find  [Ctrl+P] Files  [Alt+/] Grep"
 		}
-		return "[w] Wrap  [l] Lines  [f] Diff  [/] Search  [?] Help"
+		return "[w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+P] Files  [Alt+/] Grep"
 	case modeRequest:
-		return "[w] Wrap  [v] Back  [/] Search  [?] Help"
+		return "[w] Wrap  [v] Back  [Ctrl+P] Files  [?] Help"
 	}
-	return "[/] Search  [?] Help"
+	return "[Ctrl+P] Files  [Alt+/] Grep  [?] Help"
 }
 
 func onOff(enabled bool) string {
@@ -1071,6 +1469,19 @@ func emptyFallback(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func titleCase(value string) string {
+	words := strings.Fields(value)
+	for i, word := range words {
+		runes := []rune(word)
+		if len(runes) == 0 {
+			continue
+		}
+		runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+		words[i] = string(runes)
+	}
+	return strings.Join(words, " ")
 }
 
 func (m model) viewCommitDetailsPreview() string {
@@ -1191,16 +1602,14 @@ type helpEntry struct {
 }
 
 func (m model) viewHelpFrame() string {
-	header := m.viewHeader()
-	headerHeight := lipgloss.Height(header)
-	bodyHeight := max(0, m.height-headerHeight)
+	bodyHeight := max(0, m.height-1)
 	dialog := m.viewHelpDialog(m.width, bodyHeight)
 	body := lipgloss.Place(m.width, bodyHeight, lipgloss.Center, lipgloss.Center, dialog)
-	return header + "\n" + body + "\n"
+	return body + "\n" + m.viewStatusBar()
 }
 
 func (m model) viewHelpDialog(width int, height int) string {
-	dialogWidth := clamp(width-8, 36, 76)
+	dialogWidth := clamp(width-4, 48, 120)
 	if width > 0 && dialogWidth > width {
 		dialogWidth = width
 	}
@@ -1210,7 +1619,7 @@ func (m model) viewHelpDialog(width int, height int) string {
 	for _, entry := range entries {
 		keyWidth = max(keyWidth, lipgloss.Width(entry.keys))
 	}
-	keyWidth = clamp(keyWidth, 6, 16)
+	keyWidth = clamp(keyWidth, 6, 20)
 
 	var lines []string
 	lines = append(lines, titleStyle.Render("Help"))
@@ -1229,7 +1638,7 @@ func (m model) viewHelpDialog(width int, height int) string {
 	lines = append(lines, mutedStyle.Render("Press ? to return."))
 
 	if height > 0 {
-		maxContentLines := max(3, height-4)
+		maxContentLines := max(3, height-2)
 		if len(lines) > maxContentLines {
 			lines = append([]string(nil), lines[:maxContentLines]...)
 			lines[len(lines)-1] = mutedStyle.Render("... resize the terminal to see more")
@@ -1249,7 +1658,8 @@ func (m model) viewHelpDialog(width int, height int) string {
 
 func (m model) helpEntries() []helpEntry {
 	entries := []helpEntry{
-		{"/", "Search files", "fuzzy find a current repository file"},
+		{"ctrl+p", "Files", "fuzzy find a repository file by path"},
+		{"alt+/", "Grep", "search text across repository files"},
 		{"?", "Close help", "return to the current screen"},
 		{"ctrl+c", "Quit", "exit agentgit immediately"},
 	}
@@ -1321,6 +1731,8 @@ func (m model) helpEntries() []helpEntry {
 		return append([]helpEntry{
 			{"up/down", "Scroll", "move through diff lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"/", "Find", "search within the current diff"},
+			{"ctrl+f", "Find", "same as /"},
 			{"n/p", "Next/previous hunk", "jump between diff hunks"},
 			{"m", "Diff layout", "toggle unified and split diff"},
 			{"l", "Line numbers", "toggle old and new file line numbers"},
@@ -1333,6 +1745,8 @@ func (m model) helpEntries() []helpEntry {
 		fullEntries := []helpEntry{
 			{"up/down", "Scroll", "move through file lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
+			{"/", "Find", "search within the current file"},
+			{"ctrl+f", "Find", "same as /"},
 			{"l", "Line numbers", "toggle file line numbers"},
 			{"w", "Wrap lines", "show complete long lines across multiple screen rows"},
 			{"r", "Refresh", "reload current commit data"},
@@ -1536,11 +1950,12 @@ func (m *model) toggleTopLevelView() {
 	m.scroll = 0
 }
 
-func (m *model) refresh() {
+func (m *model) refresh() tea.Cmd {
 	selectedCommit := ""
 	if len(m.commits) > 0 && m.commitIdx >= 0 && m.commitIdx < len(m.commits) {
 		selectedCommit = m.commits[m.commitIdx].Hash
 	}
+	previousHead := currentHeadHash(m.commits)
 	selectedDirectory := ""
 	visibleDirectories := m.visibleDirectoryEntries()
 	if len(visibleDirectories) > 0 && m.dirIdx >= 0 && m.dirIdx < len(visibleDirectories) {
@@ -1560,22 +1975,13 @@ func (m *model) refresh() {
 	commits, err := git.CommitsWithUncommitted(m.root, m.limit)
 	if err != nil {
 		m.err = err
-		return
-	}
-	requests, err := transcript.RequestsByRepo(m.root)
-	if err != nil {
-		m.err = err
-		return
+		return nil
 	}
 	m.branch = git.Branch(m.root)
 	m.head = git.ShortHead(m.root)
 	m.commits = commits
-	m.requests = requests
 	m.fileCache = map[string][]string{}
-	m.diffCache = map[string][]string{}
-	m.diffCacheKeys = nil
-	m.fullCache = map[string][]string{}
-	m.fullCacheKeys = nil
+	m.invalidateMutableRenderedCaches(previousHead)
 	if !directoryContext {
 		m.expanded = map[string]bool{}
 	}
@@ -1616,7 +2022,7 @@ func (m *model) refresh() {
 		m.files = nil
 		m.fileIdx = 0
 		m.mode = modeCommits
-		return
+		return m.startRequestsLoad()
 	}
 	if m.worktreeFile {
 		m.files = []string{selectedFile}
@@ -1632,7 +2038,7 @@ func (m *model) refresh() {
 		}
 		if len(m.files) == 0 {
 			m.mode = modeCommits
-			return
+			return m.startRequestsLoad()
 		}
 	}
 	if m.mode == modeDiff {
@@ -1644,6 +2050,62 @@ func (m *model) refresh() {
 			m.loadFullFile()
 		}
 	}
+	return m.startRequestsLoad()
+}
+
+func (m *model) startRequestsLoad() tea.Cmd {
+	if m.requestsCmdCancel != nil {
+		m.requestsCmdCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.requestsLoadSeq++
+	m.requestsLoading = true
+	m.requestsCmdContext = ctx
+	m.requestsCmdCancel = cancel
+	if m.requestsCache == nil {
+		m.requestsCache = transcript.NewCache()
+	}
+	return m.loadRequestsCmd(ctx, m.requestsLoadSeq)
+}
+
+func (m *model) invalidateMutableRenderedCaches(previousCommit string) {
+	m.diffCache, m.diffCacheKeys = keepImmutableRenderedCache(m.diffCache, m.diffCacheKeys, previousCommit)
+	m.fullCache, m.fullCacheKeys = keepImmutableRenderedCache(m.fullCache, m.fullCacheKeys, previousCommit)
+}
+
+func keepImmutableRenderedCache(cache map[string][]string, keys []string, previousCommit string) (map[string][]string, []string) {
+	if len(cache) == 0 {
+		return cache, keys
+	}
+	filtered := make(map[string][]string, len(cache))
+	filteredKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		hash := cacheKeyCommit(key)
+		if hash == "" || hash == git.UncommittedHash || hash == previousCommit {
+			continue
+		}
+		if lines, ok := cache[key]; ok {
+			filtered[key] = lines
+			filteredKeys = append(filteredKeys, key)
+		}
+	}
+	return filtered, filteredKeys
+}
+
+func cacheKeyCommit(key string) string {
+	if i := strings.IndexByte(key, '\x00'); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+func currentHeadHash(commits []git.Commit) string {
+	for _, commit := range commits {
+		if commit.Hash != git.UncommittedHash {
+			return commit.Hash
+		}
+	}
+	return ""
 }
 
 func (m *model) toggleRequestDrawer() {
@@ -1708,44 +2170,45 @@ func (m *model) requestSelectAction(action selectAction) {
 	m.notice = "this will rewrite the latest commits"
 }
 
-func (m *model) confirmSelectAction() {
+func (m *model) confirmSelectAction() tea.Cmd {
 	if m.mode != modeSelect || m.pending == selectActionNone {
-		return
+		return nil
 	}
 	action := m.pending
 	selected, err := m.validateSelectAction(action)
 	if err != nil {
 		m.notice = err.Error()
 		m.pending = selectActionNone
-		return
+		return nil
 	}
 	base, err := git.Parent(m.root, selected[len(selected)-1].Hash)
 	if err != nil {
 		m.notice = err.Error()
 		m.pending = selectActionNone
-		return
+		return nil
 	}
 	switch action {
 	case selectActionRemove:
 		if err := git.ResetHard(m.root, base); err != nil {
 			m.notice = "delete failed: " + err.Error()
 			m.pending = selectActionNone
-			return
+			return nil
 		}
 		m.selected = map[string]bool{}
 		m.pending = selectActionNone
-		m.refreshWithNotice(fmt.Sprintf("deleted %d commits", len(selected)))
+		return m.refreshWithNotice(fmt.Sprintf("deleted %d commits", len(selected)))
 	case selectActionSquash:
 		newHash, err := git.SquashSince(m.root, base, squashCommitMessage(selected))
 		if err != nil {
 			m.notice = "merge failed: " + err.Error()
 			m.pending = selectActionNone
-			return
+			return nil
 		}
 		m.selected = map[string]bool{}
 		m.pending = selectActionNone
-		m.refreshWithNotice(fmt.Sprintf("merged %d commits into %s", len(selected), shortHash(newHash)))
+		return m.refreshWithNotice(fmt.Sprintf("merged %d commits into %s", len(selected), shortHash(newHash)))
 	}
+	return nil
 }
 
 func (m *model) validateSelectAction(action selectAction) ([]git.Commit, error) {
@@ -1828,11 +2291,12 @@ func (m *model) clearNotice() {
 	m.notice = ""
 }
 
-func (m *model) refreshWithNotice(notice string) {
-	m.refresh()
+func (m *model) refreshWithNotice(notice string) tea.Cmd {
+	cmd := m.refresh()
 	if m.err == nil {
 		m.notice = notice
 	}
+	return cmd
 }
 
 func (m model) pendingActionName() string {
@@ -1889,6 +2353,9 @@ func (m model) viewRequestFull() string {
 	var b strings.Builder
 	req, ok := m.selectedRequest()
 	if !ok {
+		if m.requestsLoading {
+			return mutedStyle.Render("Loading agent requests...")
+		}
 		return mutedStyle.Render("No requests")
 	}
 	b.WriteString(titleStyle.Render("Request Details"))
@@ -2005,9 +2472,15 @@ func (m model) viewSelectList(width int) string {
 
 func (m model) viewRequestsList(width int) string {
 	if len(m.requests) == 0 {
+		if m.requestsLoading {
+			return mutedStyle.Render("Loading agent requests...")
+		}
 		return mutedStyle.Render("no requests")
 	}
 	var b strings.Builder
+	if m.requestsLoading {
+		m.renderListLine(&b, mutedStyle.Render("Loading agent requests..."), width, false)
+	}
 	for i, req := range m.requests {
 		m.renderListLine(&b, m.requestListLine(req), width, i == m.requestIdx)
 	}
@@ -2305,14 +2778,21 @@ func (m model) renderedDiffLines() []string {
 	lines := m.visibleDiffLines()
 	width := m.frameInnerWidth()
 	if m.lineNums && m.diffMode == diffUnified {
-		return numberUnifiedDiffLines(lines, width, m.wrapLines)
+		numbered := numberUnifiedDiffLines(lines, width, m.wrapLines)
+		for i := range numbered {
+			numbered[i] = m.highlightCurrentFileSearchLine(numbered[i], i+1)
+		}
+		return numbered
 	}
 	rendered := make([]string, 0, len(lines))
-	for _, line := range lines {
+	for i, line := range lines {
 		if m.wrapLines {
-			rendered = append(rendered, hardwrapLine(styleDiffLine(line, width), width)...)
+			renderedLine := styleDiffLine(line, width)
+			renderedLine = m.highlightCurrentFileSearchLine(renderedLine, i+1)
+			rendered = append(rendered, hardwrapLine(renderedLine, width)...)
 		} else {
-			rendered = append(rendered, renderVisibleDiffLine(line, width, m.diffMode == diffSplit))
+			renderedLine := renderVisibleDiffLine(line, width, m.diffMode == diffSplit)
+			rendered = append(rendered, m.highlightCurrentFileSearchLine(renderedLine, i+1))
 		}
 	}
 	return rendered
@@ -2347,6 +2827,7 @@ func (m model) renderedFullFileLines() []string {
 	numberWidth := len(fmt.Sprint(max(1, len(m.fullLines))))
 	rendered := make([]string, 0, len(m.fullLines))
 	for i, line := range m.fullLines {
+		line = m.highlightCurrentFileSearchLine(line, i+1)
 		prefix := ""
 		if m.lineNums {
 			prefix = mutedStyle.Render(fmt.Sprintf("%*d │ ", numberWidth, i+1))

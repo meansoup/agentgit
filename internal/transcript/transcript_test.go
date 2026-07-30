@@ -1,9 +1,11 @@
 package transcript
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRequestsByRepoScansCodexSessionDeterministically(t *testing.T) {
@@ -94,6 +96,48 @@ func TestRequestsByRepoScansGeminiProjectChat(t *testing.T) {
 	}
 }
 
+func TestRequestsByRepoContextCachesAndInvalidatesChangedFiles(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "07", "29")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeCodexRequest(t, path, repo, "first")
+	cache := NewCache()
+
+	got, err := RequestsByRepoContext(context.Background(), repo, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Message != "first" {
+		t.Fatalf("initial requests = %+v", got)
+	}
+
+	time.Sleep(time.Millisecond)
+	writeCodexRequest(t, path, repo, "second")
+	got, err = RequestsByRepoContext(context.Background(), repo, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Message != "second" {
+		t.Fatalf("changed requests = %+v", got)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err = RequestsByRepoContext(context.Background(), repo, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("deleted requests = %+v, want none", got)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -102,4 +146,12 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeCodexRequest(t *testing.T, path, repo, message string) {
+	t.Helper()
+	writeFile(t, path, `{"type":"session_meta","timestamp":"2026-07-29T01:00:00Z","payload":{"id":"session-a","cwd":"`+repo+`"}}
+{"type":"turn_context","timestamp":"2026-07-29T01:00:01Z","payload":{"turn_id":"turn-a","model":"gpt-5","cwd":"`+repo+`"}}
+{"type":"event_msg","timestamp":"2026-07-29T01:00:02Z","payload":{"type":"user_message","message":"`+message+`"}}
+`)
 }

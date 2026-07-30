@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type Request struct {
@@ -27,7 +29,26 @@ type Request struct {
 	SourcePath  string
 }
 
+type Cache struct {
+	mu    sync.Mutex
+	files map[string]cachedFile
+}
+
+type cachedFile struct {
+	mtime    int64
+	size     int64
+	requests []Request
+}
+
+func NewCache() *Cache {
+	return &Cache{files: map[string]cachedFile{}}
+}
+
 func RequestsByRepo(repoRoot string) ([]Request, error) {
+	return RequestsByRepoContext(context.Background(), repoRoot, nil)
+}
+
+func RequestsByRepoContext(ctx context.Context, repoRoot string, cache *Cache) ([]Request, error) {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return nil, err
@@ -35,17 +56,24 @@ func RequestsByRepo(repoRoot string) ([]Request, error) {
 	root = filepath.Clean(root)
 	var all []Request
 	var errs []error
-	for _, scan := range []func(string) ([]Request, error){
+	seen := map[string]bool{}
+	for _, scan := range []func(context.Context, string, *Cache, map[string]bool) ([]Request, error){
 		scanClaude,
 		scanCodex,
 		scanGemini,
 	} {
-		requests, err := scan(root)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		requests, err := scan(ctx, root, cache, seen)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		all = append(all, requests...)
+	}
+	if cache != nil {
+		cache.prune(seen)
 	}
 	sort.SliceStable(all, func(i, j int) bool {
 		if all[i].Timestamp != all[j].Timestamp {
@@ -59,7 +87,7 @@ func RequestsByRepo(repoRoot string) ([]Request, error) {
 	return all, nil
 }
 
-func scanClaude(repoRoot string) ([]Request, error) {
+func scanClaude(ctx context.Context, repoRoot string, cache *Cache, seen map[string]bool) ([]Request, error) {
 	home, err := claudeHomeDir()
 	if err != nil {
 		return nil, nil
@@ -78,10 +106,10 @@ func scanClaude(repoRoot string) ([]Request, error) {
 			paths = append(paths, filepath.Join(dir, entry.Name()))
 		}
 	}
-	return scanJSONL(paths, repoRoot, parseClaudeRecord)
+	return scanJSONL(ctx, paths, repoRoot, "claude-jsonl", parseClaudeRecord, cache, seen)
 }
 
-func scanCodex(repoRoot string) ([]Request, error) {
+func scanCodex(ctx context.Context, repoRoot string, cache *Cache, seen map[string]bool) ([]Request, error) {
 	home, err := codexHomeDir()
 	if err != nil {
 		return nil, nil
@@ -94,24 +122,28 @@ func scanCodex(repoRoot string) ([]Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanJSONL(paths, repoRoot, parseCodexRecord)
+	paths = filterCodexSessionPaths(ctx, paths, repoRoot, cache)
+	return scanJSONL(ctx, paths, repoRoot, "codex-jsonl", parseCodexRecord, cache, seen)
 }
 
-func scanGemini(repoRoot string) ([]Request, error) {
+func scanGemini(ctx context.Context, repoRoot string, cache *Cache, seen map[string]bool) ([]Request, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, nil
 	}
 	geminiHome := filepath.Join(home, ".gemini")
 	var requests []Request
-	if projectSlug := geminiProjectSlug(geminiHome, repoRoot); projectSlug != "" {
+	projectSlug := geminiProjectSlug(geminiHome, repoRoot)
+	if projectSlug != "" {
 		chatRoot := filepath.Join(geminiHome, "tmp", projectSlug, "chats")
 		paths, err := jsonFiles(chatRoot, ".json")
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
 		for _, path := range paths {
-			got, err := scanGeminiChat(path, repoRoot)
+			got, err := scanCachedPath(ctx, path, repoRoot, "gemini-chat", cache, seen, func() ([]Request, error) {
+				return scanGeminiChat(path, repoRoot)
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +154,8 @@ func scanGemini(repoRoot string) ([]Request, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	got, err := scanJSONL(paths, repoRoot, parseGeminiJSONLRecord)
+	paths = filterGeminiJSONLPaths(paths, geminiHome, projectSlug)
+	got, err := scanJSONL(ctx, paths, repoRoot, "gemini-jsonl", parseGeminiJSONLRecord, cache, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -144,44 +177,137 @@ type parseState struct {
 
 type recordParser func(map[string]any, *parseState, string)
 
-func scanJSONL(paths []string, repoRoot string, parser recordParser) ([]Request, error) {
+func scanJSONL(ctx context.Context, paths []string, repoRoot, kind string, parser recordParser, cache *Cache, seen map[string]bool) ([]Request, error) {
 	sort.Strings(paths)
 	var all []Request
 	for _, path := range paths {
-		file, err := os.Open(path)
+		requests, err := scanCachedPath(ctx, path, repoRoot, kind, cache, seen, func() ([]Request, error) {
+			return scanJSONLFile(ctx, path, repoRoot, parser)
+		})
 		if err != nil {
 			return nil, err
 		}
-		state := parseState{repoRoot: repoRoot}
-		reader := bufio.NewReader(file)
-		for {
-			line, readErr := reader.ReadString('\n')
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				_ = file.Close()
-				return nil, readErr
-			}
-			line = strings.TrimSpace(line)
-			if line == "" && errors.Is(readErr, io.EOF) {
-				break
-			}
-			var record map[string]any
-			if err := json.Unmarshal([]byte(line), &record); err == nil {
-				parser(record, &state, path)
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-		}
-		closeErr := file.Close()
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		for i := range state.requests {
-			finalizeRequest(&state.requests[i])
-		}
-		all = append(all, state.requests...)
+		all = append(all, requests...)
 	}
 	return all, nil
+}
+
+func scanJSONLFile(ctx context.Context, path, repoRoot string, parser recordParser) ([]Request, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	state := parseState{repoRoot: repoRoot}
+	reader := bufio.NewReader(file)
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			_ = file.Close()
+			return nil, readErr
+		}
+		line = strings.TrimSpace(line)
+		if line == "" && errors.Is(readErr, io.EOF) {
+			break
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err == nil {
+			parser(record, &state, path)
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+	closeErr := file.Close()
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	for i := range state.requests {
+		finalizeRequest(&state.requests[i])
+	}
+	return state.requests, nil
+}
+
+func scanCachedPath(ctx context.Context, path, repoRoot, kind string, cache *Cache, seen map[string]bool, parse func() ([]Request, error)) ([]Request, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	key := kind + "\x00" + path
+	if seen != nil {
+		seen[key] = true
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	mtime := info.ModTime().UnixNano()
+	size := info.Size()
+	if cache != nil {
+		if requests, ok := cache.get(key, mtime, size); ok {
+			return requests, nil
+		}
+	}
+	requests, err := parse()
+	if err != nil {
+		return nil, err
+	}
+	for i := range requests {
+		requests[i].RepoRoot = repoRoot
+	}
+	if cache != nil {
+		cache.set(key, mtime, size, requests)
+	}
+	return requests, nil
+}
+
+func (c *Cache) get(key string, mtime, size int64) ([]Request, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.files == nil {
+		c.files = map[string]cachedFile{}
+	}
+	item, ok := c.files[key]
+	if !ok || item.mtime != mtime || item.size != size {
+		return nil, false
+	}
+	return cloneRequests(item.requests), true
+}
+
+func (c *Cache) set(key string, mtime, size int64, requests []Request) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.files == nil {
+		c.files = map[string]cachedFile{}
+	}
+	c.files[key] = cachedFile{mtime: mtime, size: size, requests: cloneRequests(requests)}
+}
+
+func (c *Cache) prune(seen map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.files {
+		if !seen[key] {
+			delete(c.files, key)
+		}
+	}
+}
+
+func cloneRequests(requests []Request) []Request {
+	if len(requests) == 0 {
+		return nil
+	}
+	cloned := make([]Request, len(requests))
+	copy(cloned, requests)
+	for i := range cloned {
+		cloned[i].EditedFiles = append([]string(nil), cloned[i].EditedFiles...)
+	}
+	return cloned
 }
 
 func parseClaudeRecord(record map[string]any, state *parseState, source string) {
@@ -540,6 +666,93 @@ func jsonFiles(root, suffix string) ([]string, error) {
 	return paths, err
 }
 
+func filterCodexSessionPaths(ctx context.Context, paths []string, repoRoot string, cache *Cache) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if cache != nil && cache.hasCurrent("codex-jsonl\x00"+path) {
+			filtered = append(filtered, path)
+			continue
+		}
+		match, known := codexSessionReferencesRepo(ctx, path, repoRoot)
+		if !known || match {
+			filtered = append(filtered, path)
+		}
+	}
+	return filtered
+}
+
+func codexSessionReferencesRepo(ctx context.Context, path, repoRoot string) (bool, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return true, false
+	}
+	defer file.Close()
+	known := false
+	reader := bufio.NewReader(file)
+	for {
+		if ctx.Err() != nil {
+			return true, false
+		}
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return true, false
+		}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			var record map[string]any
+			if err := json.Unmarshal([]byte(line), &record); err == nil {
+				payload := objectValue(record, "payload")
+				if record["type"] == "session_meta" || record["type"] == "turn_context" {
+					if codexPayloadReferencesRepo(payload, repoRoot) {
+						return true, true
+					}
+					if stringValue(payload, "cwd") != "" || payload["workspace_roots"] != nil {
+						known = true
+					}
+				}
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+	return false, known
+}
+
+func codexPayloadReferencesRepo(payload map[string]any, repoRoot string) bool {
+	if cwd := cleanAbsPath(stringValue(payload, "cwd")); cwd == repoRoot {
+		return true
+	}
+	for _, root := range workspaceRoots(payload["workspace_roots"]) {
+		if root == repoRoot {
+			return true
+		}
+	}
+	return false
+}
+
+func filterGeminiJSONLPaths(paths []string, geminiHome, projectSlug string) []string {
+	if len(paths) == 0 || projectSlug == "" {
+		return paths
+	}
+	projectTmpRoot := filepath.Join(geminiHome, "tmp")
+	projectRoot := filepath.Join(projectTmpRoot, projectSlug)
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if rel, err := filepath.Rel(projectTmpRoot, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			if relProject, relErr := filepath.Rel(projectRoot, path); relErr == nil && relProject != "." && !strings.HasPrefix(relProject, "..") {
+				filtered = append(filtered, path)
+			}
+			continue
+		}
+		filtered = append(filtered, path)
+	}
+	return filtered
+}
+
 func geminiProjectSlug(geminiHome, repoRoot string) string {
 	raw, err := os.ReadFile(filepath.Join(geminiHome, "projects.json"))
 	if err != nil {
@@ -552,6 +765,21 @@ func geminiProjectSlug(geminiHome, repoRoot string) string {
 		return ""
 	}
 	return parsed.Projects[repoRoot]
+}
+
+func (c *Cache) hasCurrent(key string) bool {
+	parts := strings.SplitN(key, "\x00", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	info, err := os.Stat(parts[1])
+	if err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	item, ok := c.files[key]
+	return ok && item.mtime == info.ModTime().UnixNano() && item.size == info.Size()
 }
 
 func workspaceRoots(value any) []string {
