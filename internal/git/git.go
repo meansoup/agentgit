@@ -281,6 +281,40 @@ func ChangedFiles(root string, commitHash string) ([]string, error) {
 	return files, nil
 }
 
+func ChangedFileStatuses(root string, commitHash string) (map[string]string, error) {
+	if commitHash == UncommittedHash {
+		return UncommittedFileStatuses(root)
+	}
+	out, err := RunBytes(root, "show", "--pretty=format:", "--name-status", "-z", commitHash)
+	if err != nil {
+		return nil, err
+	}
+	statuses := map[string]string{}
+	parts := bytes.Split(out, []byte{0})
+	for i := 0; i < len(parts); i++ {
+		status := string(parts[i])
+		if status == "" {
+			continue
+		}
+		if i+1 >= len(parts) {
+			break
+		}
+		path := string(parts[i+1])
+		i++
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			if i+1 >= len(parts) {
+				break
+			}
+			path = string(parts[i+1])
+			i++
+		}
+		if path != "" {
+			statuses[path] = statusKind(status)
+		}
+	}
+	return statuses, nil
+}
+
 func UncommittedFiles(root string) ([]string, error) {
 	paths, err := StatusPaths(root)
 	if err != nil {
@@ -292,6 +326,43 @@ func UncommittedFiles(root string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func UncommittedFileStatuses(root string) (map[string]string, error) {
+	out, err := Run(root, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(out, "\x00")
+	statuses := map[string]string{}
+	for i := 0; i < len(parts); i++ {
+		entry := parts[i]
+		if entry == "" || len(entry) < 4 {
+			continue
+		}
+		status := entry[:2]
+		path := entry[3:]
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			i++
+			if i < len(parts) {
+				path = parts[i]
+			}
+		}
+		if path != "" {
+			statuses[path] = statusKind(status)
+		}
+	}
+	return statuses, nil
+}
+
+func statusKind(status string) string {
+	if strings.Contains(status, "D") {
+		return "deleted"
+	}
+	if strings.Contains(status, "A") || strings.Contains(status, "?") || strings.Contains(status, "C") {
+		return "created"
+	}
+	return "updated"
 }
 
 func WorktreeFiles(root string) ([]string, error) {

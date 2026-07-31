@@ -74,6 +74,7 @@ type model struct {
 	dirEntries         []directoryEntry
 	expanded           map[string]bool
 	fileCache          map[string][]string
+	fileStatusCache    map[string]map[string]string
 	diffCache          map[string][]string
 	diffCacheKeys      []string
 	fullCache          map[string][]string
@@ -201,6 +202,7 @@ func Run(root string, limit int) error {
 		requestsCmdCancel:  cancel,
 		requestsCache:      transcript.NewCache(),
 		fileCache:          map[string][]string{},
+		fileStatusCache:    map[string]map[string]string{},
 		diffCache:          map[string][]string{},
 		fullCache:          map[string][]string{},
 		expanded:           map[string]bool{},
@@ -1519,9 +1521,14 @@ func (m model) viewFileDetailsPreview() string {
 		return ""
 	}
 	file := m.files[m.fileIdx]
+	status := m.fileStatus(file, m.currentCommitHash())
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("File Preview: ") + fileStyle.Render(file))
 	b.WriteString("\n\n")
+	if status != "" {
+		b.WriteString(m.fileStatusStyle(status).Render(status))
+		b.WriteString("\n\n")
+	}
 	if m.selectedFileIsImage() {
 		b.WriteString(markerStyle.Render("Image file"))
 		b.WriteByte('\n')
@@ -1981,6 +1988,7 @@ func (m *model) refresh() tea.Cmd {
 	m.head = git.ShortHead(m.root)
 	m.commits = commits
 	m.fileCache = map[string][]string{}
+	m.fileStatusCache = map[string]map[string]string{}
 	m.invalidateMutableRenderedCaches(previousHead)
 	if !directoryContext {
 		m.expanded = map[string]bool{}
@@ -2654,7 +2662,7 @@ func (m model) viewCommitFilePreview(width int) string {
 		return b.String()
 	}
 	for _, file := range files {
-		b.WriteString(fileStyle.Render(truncateVisible(file, width)))
+		b.WriteString(m.renderFileLabel(file, commit.Hash, width, false))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -2697,20 +2705,55 @@ func (m model) viewFilesList(width int) string {
 		return ""
 	}
 	for i, file := range m.files {
-		line := fileStyle.Render(file)
-		if i == m.fileIdx {
-			line = cursorStyle.Render(line)
-		}
-		b.WriteString(truncateVisible(line, width))
+		line := m.renderFileLabel(file, m.currentCommitHash(), width, i == m.fileIdx)
+		b.WriteString(line)
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func (m model) currentCommitHash() string {
+	if len(m.commits) == 0 || m.commitIdx < 0 || m.commitIdx >= len(m.commits) {
+		return ""
+	}
+	return m.commits[m.commitIdx].Hash
+}
+
+func (m model) renderFileLabel(file string, commitHash string, width int, selected bool) string {
+	line := fileStyle.Render(file)
+	if status := m.fileStatus(file, commitHash); status != "" {
+		line += mutedStyle.Render("  ")
+		line += m.fileStatusStyle(status).Render(status)
+	}
+	if selected {
+		line = cursorStyle.Render(line)
+	}
+	return truncateVisible(line, width)
+}
+
+func (m model) fileStatus(file string, commitHash string) string {
+	if commitHash == "" || m.fileStatusCache == nil {
+		return ""
+	}
+	return m.fileStatusCache[commitHash][file]
+}
+
+func (m model) fileStatusStyle(status string) lipgloss.Style {
+	switch status {
+	case "created":
+		return addLineStyle
+	case "deleted":
+		return delLineStyle
+	default:
+		return hunkStyle
+	}
 }
 
 func (m model) viewFilesBody(height int) string {
 	if height <= 0 {
 		return ""
 	}
+	width := m.frameInnerWidth()
 	start := 0
 	if len(m.files) > height {
 		start = clamp(m.fileIdx-height/2, 0, len(m.files)-height)
@@ -2718,14 +2761,11 @@ func (m model) viewFilesBody(height int) string {
 	end := min(len(m.files), start+height)
 	lines := make([]string, 0, height)
 	for i := start; i < end; i++ {
-		line := fileStyle.Render(m.files[i])
-		if i == m.fileIdx {
-			line = cursorStyle.Render(line)
-		}
-		lines = append(lines, frameLine(line, m.frameInnerWidth()))
+		line := m.renderFileLabel(m.files[i], m.currentCommitHash(), width, i == m.fileIdx)
+		lines = append(lines, frameLine(line, width))
 	}
 	for len(lines) < height {
-		lines = append(lines, frameLine("", m.frameInnerWidth()))
+		lines = append(lines, frameLine("", width))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2994,6 +3034,9 @@ func (m *model) loadCommitFilesAt(index int) {
 	if m.fileCache == nil {
 		m.fileCache = map[string][]string{}
 	}
+	if m.fileStatusCache == nil {
+		m.fileStatusCache = map[string]map[string]string{}
+	}
 	hash := m.commits[index].Hash
 	if _, ok := m.fileCache[hash]; ok {
 		return
@@ -3004,6 +3047,10 @@ func (m *model) loadCommitFilesAt(index int) {
 		return
 	}
 	m.fileCache[hash] = files
+	statuses, err := git.ChangedFileStatuses(m.root, hash)
+	if err == nil {
+		m.fileStatusCache[hash] = statuses
+	}
 }
 
 func (m *model) loadDirectoryEntries() {

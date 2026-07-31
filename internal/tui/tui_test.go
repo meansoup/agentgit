@@ -1263,6 +1263,71 @@ func TestFrameLineClearsAndPadsLongLines(t *testing.T) {
 	}
 }
 
+func TestFilesViewMarksFileStatuses(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:   []string{"created.go", "updated.go", "deleted.go"},
+		fileStatusCache: map[string]map[string]string{
+			"abc": {
+				"created.go": "created",
+				"updated.go": "updated",
+				"deleted.go": "deleted",
+			},
+		},
+		mode:  modeFiles,
+		width: 80,
+	}
+
+	view := ansi.Strip(m.viewFilesList(80))
+
+	for _, want := range []string{"created.go  created", "updated.go  updated", "deleted.go  deleted"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("files view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestFileDetailsPreviewShowsSelectedFileStatus(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:   []string{"updated.go"},
+		fileStatusCache: map[string]map[string]string{
+			"abc": {"updated.go": "updated"},
+		},
+		mode:  modeFiles,
+		width: 80,
+	}
+
+	view := ansi.Strip(m.viewFileDetailsPreview())
+
+	for _, want := range []string{"File Preview", "updated.go", "updated", "press Enter/Right for diff"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("file preview missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestFilesModeViewIncludesFilePreview(t *testing.T) {
+	m := model{
+		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:   []string{"updated.go"},
+		fileStatusCache: map[string]map[string]string{
+			"abc": {"updated.go": "updated"},
+		},
+		mode:   modeFiles,
+		width:  100,
+		height: 20,
+	}
+
+	view := ansi.Strip(m.View())
+
+	for _, want := range []string{"File Preview", "updated.go", "updated"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("files mode view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestEnterCommitDoesNotPreloadDiff(t *testing.T) {
 	m := model{
 		root: "/definitely/not/a/repo",

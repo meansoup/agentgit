@@ -54,6 +54,92 @@ func TestUncommittedFilesIncludesTrackedAndUntrackedFiles(t *testing.T) {
 	}
 }
 
+func TestChangedFileStatusesMarksDeletedCommitFiles(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "deleted.txt", "base\n")
+	writeFile(t, root, "modified.txt", "base\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "modified.txt", "changed\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "change")
+
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := ChangedFileStatuses(root, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := statuses["deleted.txt"]; got != "deleted" {
+		t.Fatalf("deleted status = %q, want deleted", got)
+	}
+	if got := statuses["modified.txt"]; got != "updated" {
+		t.Fatalf("modified status = %q, want updated", got)
+	}
+}
+
+func TestChangedFileStatusesMarksCreatedCommitFiles(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "base.txt", "base\n")
+	runGit(t, root, "add", "base.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	writeFile(t, root, "created.txt", "new\n")
+	runGit(t, root, "add", "created.txt")
+	runGit(t, root, "commit", "-m", "add file")
+
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := ChangedFileStatuses(root, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := statuses["created.txt"]; got != "created" {
+		t.Fatalf("created status = %q, want created", got)
+	}
+}
+
+func TestChangedFileStatusesMarksDeletedUncommittedFiles(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "deleted.txt", "base\n")
+	runGit(t, root, "add", "deleted.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	statuses, err := ChangedFileStatuses(root, UncommittedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := statuses["deleted.txt"]; got != "deleted" {
+		t.Fatalf("deleted status = %q, want deleted", got)
+	}
+}
+
+func TestChangedFileStatusesMarksCreatedUncommittedFiles(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "created.txt", "new\n")
+
+	statuses, err := ChangedFileStatuses(root, UncommittedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := statuses["created.txt"]; got != "created" {
+		t.Fatalf("created status = %q, want created", got)
+	}
+}
+
 func TestUncommittedDiffForUntrackedFile(t *testing.T) {
 	root := newTestRepo(t)
 	writeFile(t, root, "tracked.txt", "base\n")
