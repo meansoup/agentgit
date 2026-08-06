@@ -107,6 +107,67 @@ func TestChangedFileStatusesMarksCreatedCommitFiles(t *testing.T) {
 	}
 }
 
+func TestChangedFileChangesDetectsRenamedCommitFiles(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "old.txt", "base\n")
+	runGit(t, root, "add", "old.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	runGit(t, root, "mv", "old.txt", "new.txt")
+	runGit(t, root, "commit", "-m", "rename")
+
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, err := ChangedFileChanges(root, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("ChangedFileChanges returned %+v, want one rename", changes)
+	}
+	if got := changes[0]; got.Path != "new.txt" || got.OldPath != "old.txt" || got.Status != "renamed" {
+		t.Fatalf("rename change = %+v, want old.txt -> new.txt renamed", got)
+	}
+	statuses, err := ChangedFileStatuses(root, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := statuses["new.txt"]; got != "renamed" {
+		t.Fatalf("renamed status = %q, want renamed", got)
+	}
+}
+
+func TestUnifiedDiffForRenamedCommitFileShowsRenameOnly(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "old.txt", "one\ntwo\n")
+	runGit(t, root, "add", "old.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	runGit(t, root, "mv", "old.txt", "new.txt")
+	runGit(t, root, "commit", "-m", "rename")
+
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := UnifiedDiff(root, head, "new.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(lines, "\n")
+
+	for _, want := range []string{"rename from old.txt", "rename to new.txt"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rename diff missing %q:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{"+one", "+two", "-one", "-two", "--- /dev/null"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("rename-only diff contains content marker %q:\n%s", notWant, got)
+		}
+	}
+}
+
 func TestChangedFileStatusesMarksDeletedUncommittedFiles(t *testing.T) {
 	root := newTestRepo(t)
 	writeFile(t, root, "deleted.txt", "base\n")
@@ -123,6 +184,58 @@ func TestChangedFileStatusesMarksDeletedUncommittedFiles(t *testing.T) {
 
 	if got := statuses["deleted.txt"]; got != "deleted" {
 		t.Fatalf("deleted status = %q, want deleted", got)
+	}
+}
+
+func TestChangedFileChangesUsesNewPathForUncommittedRename(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "old.txt", "base\n")
+	runGit(t, root, "add", "old.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	runGit(t, root, "mv", "old.txt", "new.txt")
+
+	changes, err := ChangedFileChanges(root, UncommittedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("ChangedFileChanges returned %+v, want one rename", changes)
+	}
+	if got := changes[0]; got.Path != "new.txt" || got.OldPath != "old.txt" || got.Status != "renamed" {
+		t.Fatalf("uncommitted rename change = %+v, want old.txt -> new.txt renamed", got)
+	}
+	files, err := ChangedFiles(root, UncommittedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(files, "\n")
+	if !strings.Contains(got, "new.txt") || strings.Contains(got, "old.txt") {
+		t.Fatalf("ChangedFiles(%q) = %q, want only new path", UncommittedHash, got)
+	}
+}
+
+func TestUnifiedDiffForUncommittedRenameShowsRenameOnly(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "old.txt", "one\ntwo\n")
+	runGit(t, root, "add", "old.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	runGit(t, root, "mv", "old.txt", "new.txt")
+
+	lines, err := UnifiedDiff(root, UncommittedHash, "new.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(lines, "\n")
+
+	for _, want := range []string{"rename from old.txt", "rename to new.txt"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("uncommitted rename diff missing %q:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{"+one", "+two", "-one", "-two", "--- /dev/null"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("uncommitted rename-only diff contains content marker %q:\n%s", notWant, got)
+		}
 	}
 }
 
@@ -281,6 +394,45 @@ func TestSquashSinceCombinesLatestCommits(t *testing.T) {
 	for _, path := range []string{"one.txt", "two.txt"} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Fatalf("%s missing after squash: %v", path, err)
+		}
+	}
+}
+
+func TestDeleteMergedBranchesDeletesMergedNonProtectedBranches(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	defaultBranch := Branch(root)
+	runGit(t, root, "checkout", "-b", "feature/merged")
+	writeFile(t, root, "feature.txt", "feature\n")
+	runGit(t, root, "add", "feature.txt")
+	runGit(t, root, "commit", "-m", "feature")
+	runGit(t, root, "checkout", defaultBranch)
+	runGit(t, root, "merge", "--no-ff", "feature/merged", "-m", "merge feature")
+	runGit(t, root, "checkout", "-b", "feature/unmerged")
+	writeFile(t, root, "unmerged.txt", "unmerged\n")
+	runGit(t, root, "add", "unmerged.txt")
+	runGit(t, root, "commit", "-m", "unmerged")
+	runGit(t, root, "checkout", defaultBranch)
+
+	deleted, _, err := DeleteMergedBranches(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(deleted, "\n"); got != "feature/merged" {
+		t.Fatalf("deleted branches = %q, want feature/merged", got)
+	}
+	branches, err := Run(root, "branch", "--format=%(refname:short)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(branches, "feature/merged") {
+		t.Fatalf("merged branch still exists:\n%s", branches)
+	}
+	for _, want := range []string{defaultBranch, "feature/unmerged"} {
+		if !strings.Contains(branches, want) {
+			t.Fatalf("branch list missing %q:\n%s", want, branches)
 		}
 	}
 }

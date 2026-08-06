@@ -23,8 +23,25 @@ func TestStyleDiffLineStripsNestedANSIWhenRenderingBackground(t *testing.T) {
 	if strings.Contains(rendered, "\x1b[31m") {
 		t.Fatalf("rendered line retained nested syntax ANSI: %q", rendered)
 	}
-	if got, want := ansi.Strip(rendered), "+added    "; got != want {
+	if got, want := ansi.Strip(rendered), "added     "; got != want {
 		t.Fatalf("ansi-stripped rendered line = %q, want %q", got, want)
+	}
+}
+
+func TestRenderVisibleDiffLineHidesChangeMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want string
+	}{
+		{line: "-old", want: "old       "},
+		{line: "+new", want: "new       "},
+		{line: "--- a/file.go", want: "--- a/f..."},
+		{line: "+++ b/file.go", want: "+++ b/f..."},
+	} {
+		got := ansi.Strip(renderVisibleDiffLine(tc.line, 10, false))
+		if got != tc.want {
+			t.Fatalf("renderVisibleDiffLine(%q) = %q, want %q", tc.line, got, tc.want)
+		}
 	}
 }
 
@@ -103,6 +120,48 @@ func TestWrapShortcutTogglesAndUsesUnifiedDiff(t *testing.T) {
 	}
 }
 
+func TestGitShortcutSequencesStartCommands(t *testing.T) {
+	m := model{mode: modeCommits, root: t.TempDir()}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	got := updated.(model)
+	if cmd != nil {
+		t.Fatal("g returned a command, want pending shortcut only")
+	}
+	if got.gitShortcut != "g" {
+		t.Fatalf("gitShortcut = %q, want g", got.gitShortcut)
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	got = updated.(model)
+	if cmd == nil {
+		t.Fatal("g p returned nil command, want git push command")
+	}
+	if got.gitShortcut != "" {
+		t.Fatalf("gitShortcut = %q, want cleared", got.gitShortcut)
+	}
+
+	m = model{mode: modeCommits, root: t.TempDir()}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	updated, cmd = updated.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	got = updated.(model)
+	if cmd != nil {
+		t.Fatal("g b returned a command, want pending shortcut only")
+	}
+	if got.gitShortcut != "gb" {
+		t.Fatalf("gitShortcut = %q, want gb", got.gitShortcut)
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got = updated.(model)
+	if cmd == nil {
+		t.Fatal("g b d returned nil command, want delete merged branches command")
+	}
+	if got.gitShortcut != "" {
+		t.Fatalf("gitShortcut = %q, want cleared", got.gitShortcut)
+	}
+}
+
 func TestHardwrapLinePreservesCompleteContent(t *testing.T) {
 	line := "abcdefghijklmnopqrstuvwxyz"
 
@@ -134,7 +193,7 @@ func TestWrappedDiffPreservesLongCodeLine(t *testing.T) {
 	got := ansi.Strip(m.viewDiff())
 	joined := strings.ReplaceAll(got, "\n", "")
 
-	if !strings.Contains(joined, "+abcdefghijklmnopqrstuvwxyz") {
+	if !strings.Contains(joined, "abcdefghijklmnopqrstuvwxyz") {
 		t.Fatalf("wrapped diff lost code content:\n%s", got)
 	}
 	if strings.Contains(got, "...") {
@@ -201,9 +260,9 @@ func TestNumberUnifiedDiffLinesUsesOldAndNewLineNumbers(t *testing.T) {
 	for i, want := range []string{
 		"@@ -10,2 +20,3 @@",
 		"10 20 │  context",
-		"11    │ -old",
-		"   21 │ +new",
-		"   22 │ +added",
+		"11    │ old",
+		"   21 │ new",
+		"   22 │ added",
 	} {
 		if !strings.Contains(stripped[i], want) {
 			t.Fatalf("numbered line %d = %q, want %q", i, stripped[i], want)
@@ -665,6 +724,92 @@ func TestCtrlPOpensFuzzyFileSearch(t *testing.T) {
 	}
 }
 
+func TestCtrlEOpensRecentFilesSearch(t *testing.T) {
+	m := model{
+		mode: modeCommits,
+		recentFiles: []recentFile{
+			{Path: "internal/tui/tui.go", Worktree: true},
+			{Path: "README.md", CommitHash: "abcdef123456", Worktree: false},
+		},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	got := updated.(model)
+
+	if !got.searchOpen {
+		t.Fatal("searchOpen = false after ctrl+e")
+	}
+	if got.searchKind != searchKindRecentFiles {
+		t.Fatalf("searchKind = %v, want recent files", got.searchKind)
+	}
+	if len(got.searchResults) != 2 {
+		t.Fatalf("recent search results = %+v, want two entries", got.searchResults)
+	}
+	if got.searchResults[0].Path != "internal/tui/tui.go" {
+		t.Fatalf("first recent result = %+v, want newest file first", got.searchResults[0])
+	}
+}
+
+func TestCtrlEWithoutRecentFilesShowsNotice(t *testing.T) {
+	m := model{mode: modeCommits}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	got := updated.(model)
+
+	if got.searchOpen {
+		t.Fatal("search opened without recent files")
+	}
+	if got.notice != "no recent files" {
+		t.Fatalf("notice = %q, want no recent files", got.notice)
+	}
+}
+
+func TestOpeningWorktreeFileAddsRecentFile(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "current.txt", "current content\n")
+	m := model{
+		root:         root,
+		commits:      []git.Commit{{Hash: "abc", ShortHash: "abc"}},
+		files:        []string{"current.txt"},
+		mode:         modeFiles,
+		fileReturn:   modeDirectories,
+		worktreeFile: true,
+	}
+
+	m.enter(false)
+
+	if m.mode != modeFullFile {
+		t.Fatalf("mode = %v, want full file", m.mode)
+	}
+	if len(m.recentFiles) != 1 || m.recentFiles[0].Path != "current.txt" || !m.recentFiles[0].Worktree {
+		t.Fatalf("recentFiles = %+v, want current worktree file", m.recentFiles)
+	}
+}
+
+func TestRecentFileSearchOpensWorktreeFile(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "current.txt", "current content\n")
+	m := model{
+		root: root,
+		mode: modeCommits,
+		recentFiles: []recentFile{
+			{Path: "current.txt", Worktree: true},
+		},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	got := updated.(model)
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(model)
+
+	if got.mode != modeFullFile || !got.worktreeFile {
+		t.Fatalf("mode/worktree = %v/%v, want worktree full file", got.mode, got.worktreeFile)
+	}
+	if content := ansi.Strip(strings.Join(got.fullLines, "\n")); !strings.Contains(content, "current content") {
+		t.Fatalf("fullLines = %q, want current content", content)
+	}
+}
+
 func TestFuzzyFileSearchRanksConsecutiveBasenameMatches(t *testing.T) {
 	files := []string{
 		"docs/t-u-i.md",
@@ -679,6 +824,38 @@ func TestFuzzyFileSearchRanksConsecutiveBasenameMatches(t *testing.T) {
 	}
 	if results[0].Path != "internal/tui/tui.go" {
 		t.Fatalf("top fuzzy result = %q, want internal/tui/tui.go", results[0].Path)
+	}
+}
+
+func TestFuzzyPathMatchUsesBestConnectedBasenameAlignment(t *testing.T) {
+	positions, _, ok := fuzzyPathMatch("ab/src/abc.go", "abc")
+	if !ok {
+		t.Fatal("fuzzyPathMatch did not match abc")
+	}
+
+	got := strings.TrimSpace(fmt.Sprint(positions))
+	if got != "[7 8 9]" {
+		t.Fatalf("positions = %s, want connected basename match [7 8 9]", got)
+	}
+}
+
+func TestFuzzyFileSearchRanksFilenameMatchesAboveDirectoryMatches(t *testing.T) {
+	files := []string{
+		"search/internal/runner.go",
+		"cmd/search.go",
+		"internal/runner_search.go",
+	}
+
+	results := fuzzyFileMatches(files, "search")
+
+	if len(results) != 3 {
+		t.Fatalf("fuzzy results = %d, want 3", len(results))
+	}
+	if results[0].Path != "cmd/search.go" {
+		t.Fatalf("top fuzzy result = %q, want filename exact match", results[0].Path)
+	}
+	if results[2].Path != "search/internal/runner.go" {
+		t.Fatalf("last fuzzy result = %q, want directory-only match last", results[2].Path)
 	}
 }
 
@@ -1287,7 +1464,7 @@ func TestFilesViewMarksFileStatuses(t *testing.T) {
 	}
 }
 
-func TestFileDetailsPreviewShowsSelectedFileStatus(t *testing.T) {
+func TestPanelTitleShowsSelectedFileStatus(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
 		files:   []string{"updated.go"},
@@ -1298,16 +1475,16 @@ func TestFileDetailsPreviewShowsSelectedFileStatus(t *testing.T) {
 		width: 80,
 	}
 
-	view := ansi.Strip(m.viewFileDetailsPreview())
+	title := ansi.Strip(m.panelTitle())
 
-	for _, want := range []string{"File Preview", "updated.go", "updated", "press Enter/Right for diff"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("file preview missing %q:\n%s", want, view)
+	for _, want := range []string{"Files", "updated.go", "updated"} {
+		if !strings.Contains(title, want) {
+			t.Fatalf("panel title missing %q: %q", want, title)
 		}
 	}
 }
 
-func TestFilesModeViewIncludesFilePreview(t *testing.T) {
+func TestFilesModeViewUsesBorderSummaryInsteadOfPreview(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
 		files:   []string{"updated.go"},
@@ -1321,10 +1498,33 @@ func TestFilesModeViewIncludesFilePreview(t *testing.T) {
 
 	view := ansi.Strip(m.View())
 
-	for _, want := range []string{"File Preview", "updated.go", "updated"} {
+	for _, want := range []string{"Files", "updated.go", "updated"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("files mode view missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "File Preview") || strings.Contains(view, "press Enter/Right for diff") {
+		t.Fatalf("files mode view still includes preview block:\n%s", view)
+	}
+}
+
+func TestRenderFileLabelShowsRenamePath(t *testing.T) {
+	m := model{
+		fileStatusCache: map[string]map[string]string{
+			"abc": {"new.txt": "renamed"},
+		},
+		fileChangeCache: map[string]map[string]git.FileChange{
+			"abc": {"new.txt": {Path: "new.txt", OldPath: "old.txt", Status: "renamed"}},
+		},
+	}
+
+	label := ansi.Strip(m.renderFileLabel("new.txt", "abc", 80, false))
+
+	if !strings.Contains(label, "old.txt -> new.txt") {
+		t.Fatalf("rename label = %q, want old and new path", label)
+	}
+	if !strings.Contains(label, "renamed") {
+		t.Fatalf("rename label = %q, want renamed status", label)
 	}
 }
 
@@ -1407,6 +1607,47 @@ func TestLoadDirectoryEntriesUsesCurrentWorktreeFiles(t *testing.T) {
 	}
 	if _, ok := entries["deleted.txt"]; ok {
 		t.Fatal("deleted tracked file was included in directory entries")
+	}
+}
+
+func TestLoadDirectoryEntriesFollowsRenamedFileHistory(t *testing.T) {
+	root := newTUITestRepo(t)
+	writeTUITestFile(t, root, "old.txt", "base\n")
+	runTUITestGit(t, root, "add", "old.txt")
+	runTUITestGit(t, root, "commit", "-m", "initial")
+	writeTUITestFile(t, root, "old.txt", "changed\n")
+	runTUITestGit(t, root, "add", "old.txt")
+	runTUITestGit(t, root, "commit", "-m", "change old")
+	runTUITestGit(t, root, "mv", "old.txt", "new.txt")
+	runTUITestGit(t, root, "commit", "-m", "rename")
+	commits, err := git.CommitsWithUncommitted(root, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := model{
+		root:            root,
+		commits:         commits,
+		fileCache:       map[string][]string{},
+		fileStatusCache: map[string]map[string]string{},
+		fileChangeCache: map[string]map[string]git.FileChange{},
+	}
+
+	m.loadDirectoryEntries()
+
+	var newEntry directoryEntry
+	for _, entry := range m.dirEntries {
+		if entry.Path == "old.txt" {
+			t.Fatal("directory entries included old rename path")
+		}
+		if entry.Path == "new.txt" {
+			newEntry = entry
+		}
+	}
+	if newEntry.Path == "" {
+		t.Fatalf("directory entries missing new.txt: %+v", m.dirEntries)
+	}
+	if len(newEntry.CommitIndexes) != len(commits) {
+		t.Fatalf("new.txt commit indexes = %v, want all %d commits", newEntry.CommitIndexes, len(commits))
 	}
 }
 

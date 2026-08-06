@@ -27,12 +27,15 @@
 - **이동**: `Up`/`Down`
 - **커밋/디렉토리 뷰 전환**: `Tab`
 - **최신 커밋 선택**: `s` 진입, `Space` 선택, `x` 삭제, `m` 병합, `y` 확인
-- **파일 검색**: `/` 입력 후 fuzzy 검색하고 `Enter`로 Directory 뷰에서 파일 위치 열기
+- **파일 검색**: `Ctrl+P` 입력 후 fuzzy 검색하고 `Enter`로 Directory 뷰에서 파일 위치 열기
+- **최근 파일**: `Ctrl+E`로 최근에 열었던 파일을 필터링하고 `Enter`로 다시 열기
 - **디렉토리 폴더**: `Enter`/`Right`로 폴더 접기/펼치기 및 파일 열기
 - **상세 보기**: `Right` 또는 `Enter` (커밋 → 파일 목록 → Diff)
 - **이미지 열기**: 파일 목록에서 이미지 파일 선택 후 `Enter`
 - **뒤로 가기**: `Left` 또는 `Backspace`
 - **Request 드로어**: `v`로 하단 드로어 열기/닫기, `Enter`로 전체 request 상세 보기
+- **Push**: `g` 다음 `p`로 `git push` 실행
+- **머지된 브랜치 삭제**: `g` 다음 `b` 다음 `d`로 `git branch --merged` 기준 로컬 브랜치 삭제. 현재 브랜치와 `main`/`master`/`develop`/`dev`는 제외
 - **새로고침**: `r`
 - **화면 전환**: `m` (Unified/Split diff)
 - **줄 번호 전환**: `l` (Diff/전체 파일)

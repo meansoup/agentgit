@@ -27,12 +27,15 @@ The top context bar shows the base path, Git branch, HEAD, commit count, and dir
 - **Move**: `Up`/`Down`
 - **Toggle Commit/Directory View**: `Tab`
 - **Select latest commits**: `s`, then `Space` to select, `x` to delete, `m` to merge, `y` to confirm
-- **Search files**: `/`, type a fuzzy query, then `Enter` to reveal the file in Directory view
+- **Search files**: `Ctrl+P`, type a fuzzy query, then `Enter` to reveal the file in Directory view
+- **Recent files**: `Ctrl+E`, filter recently opened files and `Enter` to reopen
 - **Directory folders**: `Enter`/`Right` toggles folders and opens files
 - **Drill down**: `Right` or `Enter` (Commit → Files → Diff)
 - **Open image**: `Enter` on an image file in the file list
 - **Go back**: `Left` or `Backspace`
 - **Request drawer**: `v` toggles a bottom drawer; `Enter` opens full request details
+- **Push**: `g` then `p` runs `git push`
+- **Delete merged branches**: `g` then `b` then `d` deletes local branches from `git branch --merged`, excluding the current branch and `main`/`master`/`develop`/`dev`
 - **Refresh**: `r`
 - **Toggle View**: `m` (Unified/Split diff)
 - **Toggle Line Numbers**: `l` (Diff/Full file)

@@ -53,6 +53,7 @@ const (
 	searchKindFiles searchKind = iota
 	searchKindCurrentFile
 	searchKindWorktreeContent
+	searchKindRecentFiles
 )
 
 type model struct {
@@ -75,10 +76,12 @@ type model struct {
 	expanded           map[string]bool
 	fileCache          map[string][]string
 	fileStatusCache    map[string]map[string]string
+	fileChangeCache    map[string]map[string]git.FileChange
 	diffCache          map[string][]string
 	diffCacheKeys      []string
 	fullCache          map[string][]string
 	fullCacheKeys      []string
+	recentFiles        []recentFile
 	selected           map[string]bool
 	mode               mode
 	pending            selectAction
@@ -105,9 +108,11 @@ type model struct {
 	searchIdx          int
 	searchFiles        []string
 	searchResults      []fileSearchResult
+	gitShortcut        string
 }
 
 const renderedFileCacheLimit = 50
+const recentFilesLimit = 20
 
 type imageOpenMsg struct {
 	err error
@@ -121,11 +126,26 @@ type requestsLoadedMsg struct {
 }
 
 type fileSearchResult struct {
-	Path      string
-	Line      int
-	Text      string
-	Positions []int
-	Score     int
+	Path       string
+	CommitHash string
+	Worktree   bool
+	Line       int
+	Text       string
+	Positions  []int
+	Score      int
+}
+
+type recentFile struct {
+	Path       string
+	CommitHash string
+	Worktree   bool
+}
+
+type gitActionMsg struct {
+	action   string
+	output   string
+	branches []string
+	err      error
 }
 
 type directoryEntry struct {
@@ -159,8 +179,8 @@ var (
 	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	dirStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
-	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
-	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
+	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#116329")).Background(lipgloss.Color("#dafbe1"))
+	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#82071e")).Background(lipgloss.Color("#ffebe9"))
 	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	cursorStyle    = lipgloss.NewStyle().Reverse(true)
 	titleStyle     = lipgloss.NewStyle().Bold(true)
@@ -203,6 +223,7 @@ func Run(root string, limit int) error {
 		requestsCache:      transcript.NewCache(),
 		fileCache:          map[string][]string{},
 		fileStatusCache:    map[string]map[string]string{},
+		fileChangeCache:    map[string]map[string]git.FileChange{},
 		diffCache:          map[string][]string{},
 		fullCache:          map[string][]string{},
 		expanded:           map[string]bool{},
@@ -321,6 +342,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if handled, cmd := m.handleGitShortcut(msg); handled {
+			return m, cmd
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			return m, m.quitCmd()
@@ -425,12 +449,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpOpen = true
 		case "ctrl+p":
 			m.openSearch()
+		case "ctrl+e":
+			m.openRecentFiles()
 		case "/":
 			m.openCurrentFileSearch()
 		case "ctrl+f":
 			m.openCurrentFileSearch()
 		case "ctrl+shift+f", "alt+/":
 			m.openWorktreeContentSearch()
+		}
+	case gitActionMsg:
+		m.gitShortcut = ""
+		if msg.err != nil {
+			m.notice = msg.action + " failed: " + msg.err.Error()
+			return m, nil
+		}
+		switch msg.action {
+		case "push":
+			m.notice = "push complete"
+			if strings.TrimSpace(msg.output) != "" {
+				m.notice += ": " + firstOutputLine(msg.output)
+			}
+		case "delete merged branches":
+			if len(msg.branches) == 0 {
+				m.notice = "no merged branches to delete"
+				return m, nil
+			}
+			return m, m.refreshWithNotice(fmt.Sprintf("deleted %d merged branches", len(msg.branches)))
 		}
 	case imageOpenMsg:
 		if msg.err != nil {
@@ -474,6 +519,50 @@ func (m *model) quitCmd() tea.Cmd {
 		m.requestsCmdContext = nil
 	}
 	return tea.Quit
+}
+
+func (m *model) handleGitShortcut(msg tea.KeyMsg) (bool, tea.Cmd) {
+	key := msg.String()
+	if m.gitShortcut != "" {
+		switch m.gitShortcut + key {
+		case "gp":
+			m.gitShortcut = ""
+			m.notice = "running git push..."
+			return true, m.pushCmd()
+		case "gb":
+			m.gitShortcut = "gb"
+			m.notice = "gb: press d to delete merged branches"
+			return true, nil
+		case "gbd":
+			m.gitShortcut = ""
+			m.notice = "deleting merged branches..."
+			return true, m.deleteMergedBranchesCmd()
+		default:
+			m.gitShortcut = ""
+		}
+	}
+	if key == "g" {
+		m.gitShortcut = "g"
+		m.notice = "g: press p to push, b d to delete merged branches"
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m model) pushCmd() tea.Cmd {
+	root := m.root
+	return func() tea.Msg {
+		output, err := git.Push(root)
+		return gitActionMsg{action: "push", output: output, err: err}
+	}
+}
+
+func (m model) deleteMergedBranchesCmd() tea.Cmd {
+	root := m.root
+	return func() tea.Msg {
+		branches, output, err := git.DeleteMergedBranches(root)
+		return gitActionMsg{action: "delete merged branches", output: output, branches: branches, err: err}
+	}
 }
 
 func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -552,6 +641,19 @@ func (m *model) openWorktreeContentSearch() {
 	m.updateSearchResults()
 }
 
+func (m *model) openRecentFiles() {
+	if len(m.recentFiles) == 0 {
+		m.notice = "no recent files"
+		return
+	}
+	m.searchOpen = true
+	m.searchKind = searchKindRecentFiles
+	m.searchText = ""
+	m.searchIdx = 0
+	m.searchFiles = nil
+	m.updateSearchResults()
+}
+
 func (m *model) closeSearch() {
 	m.searchOpen = false
 	m.searchKind = searchKindFiles
@@ -567,6 +669,8 @@ func (m *model) updateSearchResults() {
 		m.searchResults = m.currentFileContentMatches(m.searchText)
 	case searchKindWorktreeContent:
 		m.searchResults = m.worktreeContentMatches(m.searchText)
+	case searchKindRecentFiles:
+		m.searchResults = m.recentFileMatches(m.searchText)
 	default:
 		m.searchResults = fuzzyFileMatches(m.searchFiles, m.searchText)
 	}
@@ -593,6 +697,10 @@ func (m *model) selectSearchResult() {
 	}
 	if m.searchKind == searchKindWorktreeContent {
 		m.openWorktreeSearchResult(result)
+		return
+	}
+	if m.searchKind == searchKindRecentFiles {
+		m.openRecentFileResult(result)
 		return
 	}
 	path := result.Path
@@ -713,6 +821,41 @@ func (m model) worktreeContentMatches(query string) []fileSearchResult {
 	return results
 }
 
+func (m model) recentFileMatches(query string) []fileSearchResult {
+	results := make([]fileSearchResult, 0, len(m.recentFiles))
+	if strings.TrimSpace(query) == "" {
+		for i, file := range m.recentFiles {
+			results = append(results, fileSearchResult{
+				Path:       file.Path,
+				CommitHash: file.CommitHash,
+				Worktree:   file.Worktree,
+				Score:      len(m.recentFiles) - i,
+			})
+		}
+		return results
+	}
+	for i, file := range m.recentFiles {
+		positions, score, ok := fuzzyPathMatch(file.Path, query)
+		if !ok {
+			continue
+		}
+		results = append(results, fileSearchResult{
+			Path:       file.Path,
+			CommitHash: file.CommitHash,
+			Worktree:   file.Worktree,
+			Positions:  positions,
+			Score:      score + len(m.recentFiles) - i,
+		})
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		return results[i].Path < results[j].Path
+	})
+	return results
+}
+
 func (m *model) openWorktreeSearchResult(result fileSearchResult) {
 	m.closeSearch()
 	m.files = []string{result.Path}
@@ -722,6 +865,67 @@ func (m *model) openWorktreeSearchResult(result fileSearchResult) {
 	m.worktreeFile = true
 	m.scroll = max(0, result.Line-1)
 	m.loadWorktreeFile()
+	if m.err == nil {
+		m.rememberRecentFile(result.Path, "", true)
+	}
+}
+
+func (m *model) openRecentFileResult(result fileSearchResult) {
+	m.closeSearch()
+	if result.Worktree {
+		m.files = []string{result.Path}
+		m.fileIdx = 0
+		m.mode = modeFullFile
+		m.fileReturn = modeDirectories
+		m.worktreeFile = true
+		m.scroll = 0
+		m.loadWorktreeFile()
+		if m.err == nil {
+			m.rememberRecentFile(result.Path, "", true)
+		}
+		return
+	}
+	index := m.commitIndexByHash(result.CommitHash)
+	if index < 0 {
+		m.notice = "recent commit is no longer loaded"
+		return
+	}
+	m.commitIdx = index
+	m.loadCommitFilesAt(index)
+	if m.err != nil {
+		return
+	}
+	files := append([]string(nil), m.fileCache[result.CommitHash]...)
+	fileIdx := -1
+	for i, file := range files {
+		if file == result.Path {
+			fileIdx = i
+			break
+		}
+	}
+	if fileIdx < 0 {
+		m.notice = "recent file is no longer in this commit"
+		return
+	}
+	m.files = files
+	m.fileIdx = fileIdx
+	m.mode = modeDiff
+	m.fileReturn = modeCommits
+	m.worktreeFile = false
+	m.scroll = 0
+	m.loadSelectedDiff()
+	if m.err == nil {
+		m.rememberRecentFile(result.Path, result.CommitHash, false)
+	}
+}
+
+func (m model) commitIndexByHash(hash string) int {
+	for i, commit := range m.commits {
+		if commit.Hash == hash {
+			return i
+		}
+	}
+	return -1
 }
 
 func contentLineMatches(path string, lines []string, query string) []fileSearchResult {
@@ -854,25 +1058,13 @@ func positionsMatchQuery(text string, positions []int, query string) bool {
 }
 
 func (m model) viewFrame(content string, focusLine int) string {
-	var staticTop string
-	if m.mode == modeCommits {
-		staticTop = m.viewCommitDetailsPreview()
-	} else if m.mode == modeSelect {
-		staticTop = m.viewSelectDetailsPreview()
-	} else if m.mode == modeDirectories {
-		staticTop = m.viewDirectoryDetailsPreview()
-	} else if m.mode == modeFiles {
-		staticTop = m.viewFileDetailsPreview()
-	}
-
-	topHeight := lipgloss.Height(staticTop)
 	statusHeight := 1
 	frameHeight := max(0, m.height-statusHeight)
 	drawerHeight := 0
 	if m.requestDrawer && m.mode != modeRequest {
 		drawerHeight = m.requestDrawerHeight(frameHeight)
 	}
-	bodyHeight := max(0, frameHeight-2-topHeight-drawerHeight)
+	bodyHeight := max(0, frameHeight-2-drawerHeight)
 	var body string
 	if m.searchOpen {
 		searchHeight := m.searchOverlayHeight(bodyHeight)
@@ -900,7 +1092,7 @@ func (m model) viewFrame(content string, focusLine int) string {
 		}
 		body += m.viewRequestDrawer(drawerHeight)
 	}
-	return m.renderPanelFrame(staticTop, body, frameHeight) + "\n" + m.viewStatusBar()
+	return m.renderPanelFrame(body, frameHeight) + "\n" + m.viewStatusBar()
 }
 
 func (m model) searchOverlayHeight(available int) int {
@@ -1016,6 +1208,8 @@ func (m model) searchTitle() string {
 		return "file search"
 	case searchKindWorktreeContent:
 		return "content search"
+	case searchKindRecentFiles:
+		return "recent files"
 	default:
 		return "file picker"
 	}
@@ -1034,12 +1228,17 @@ func (m model) emptySearchHint() string {
 		return "type to search this file"
 	case searchKindWorktreeContent:
 		return "type to search all files"
+	case searchKindRecentFiles:
+		return "type to filter recent files"
 	default:
 		return "type to filter files"
 	}
 }
 
 func (m model) renderSearchResult(result fileSearchResult) string {
+	if m.searchKind == searchKindRecentFiles {
+		return renderRecentFileResult(result)
+	}
 	if result.Line <= 0 {
 		return renderFuzzyPath(result)
 	}
@@ -1121,51 +1320,163 @@ func fuzzyPathMatch(candidate, query string) ([]int, int, bool) {
 	candidateRunes := []rune(candidate)
 	queryRunes := []rune(strings.ToLower(query))
 	lowerCandidate := []rune(strings.ToLower(candidate))
+	if len(queryRunes) > len(candidateRunes) {
+		return nil, 0, false
+	}
 	basenameStart := 0
 	for i, char := range candidateRunes {
 		if char == '/' {
 			basenameStart = i + 1
 		}
 	}
-	positions := make([]int, 0, len(queryRunes))
-	searchFrom := 0
-	score := 0
-	lastPosition := -2
-	for _, target := range queryRunes {
-		position := -1
-		for i := searchFrom; i < len(lowerCandidate); i++ {
-			if lowerCandidate[i] == target {
-				position = i
-				break
-			}
-		}
-		if position < 0 {
-			return nil, 0, false
-		}
-		positions = append(positions, position)
-		score += 10
-		if position == lastPosition+1 {
-			score += 18
-		}
-		if position == 0 || candidateRunes[position-1] == '/' || candidateRunes[position-1] == '-' || candidateRunes[position-1] == '_' || candidateRunes[position-1] == '.' {
-			score += 14
-		}
-		if position >= basenameStart {
-			score += 5
-		}
-		lastPosition = position
-		searchFrom = position + 1
+
+	positions, score, ok := bestFuzzyPathAlignment(candidateRunes, lowerCandidate, queryRunes, basenameStart)
+	if !ok {
+		return nil, 0, false
 	}
 	lowerQuery := strings.ToLower(query)
+	lowerPath := strings.ToLower(candidate)
 	lowerBase := strings.ToLower(filepath.Base(filepath.FromSlash(candidate)))
+	baseNoExt := strings.TrimSuffix(lowerBase, strings.ToLower(filepath.Ext(lowerBase)))
+	if lowerBase == lowerQuery || baseNoExt == lowerQuery {
+		score += 500
+	} else if strings.HasPrefix(lowerBase, lowerQuery) || strings.HasPrefix(baseNoExt, lowerQuery) {
+		score += 360
+	}
 	if strings.Contains(lowerBase, lowerQuery) {
-		score += 100
+		score += 260
 	}
-	if lowerBase == lowerQuery {
-		score += 100
+	if strings.Contains(lowerPath, lowerQuery) {
+		score += 40
 	}
-	score -= len(candidateRunes) / 4
+	score -= len(candidateRunes) / 8
 	return positions, score, true
+}
+
+type fuzzyMatchState struct {
+	score int
+	prev  int
+	start int
+	ok    bool
+}
+
+func bestFuzzyPathAlignment(candidate, lowerCandidate, query []rune, basenameStart int) ([]int, int, bool) {
+	states := make([][]fuzzyMatchState, len(query))
+	for i := range states {
+		states[i] = make([]fuzzyMatchState, len(candidate))
+	}
+	for queryIndex, target := range query {
+		for candidateIndex, char := range lowerCandidate {
+			if char != target {
+				continue
+			}
+			charScore := fuzzyCharScore(candidate, candidateIndex, basenameStart)
+			if queryIndex == 0 {
+				states[queryIndex][candidateIndex] = fuzzyMatchState{
+					score: charScore - fuzzyLeadingPenalty(candidateIndex, basenameStart),
+					prev:  -1,
+					start: candidateIndex,
+					ok:    true,
+				}
+				continue
+			}
+			best := fuzzyMatchState{}
+			for previousIndex := 0; previousIndex < candidateIndex; previousIndex++ {
+				previous := states[queryIndex-1][previousIndex]
+				if !previous.ok {
+					continue
+				}
+				score := previous.score + charScore + fuzzyGapScore(previousIndex, candidateIndex)
+				candidateState := fuzzyMatchState{
+					score: score,
+					prev:  previousIndex,
+					start: previous.start,
+					ok:    true,
+				}
+				if betterFuzzyState(candidateState, best, candidateIndex, candidateIndex) {
+					best = candidateState
+				}
+			}
+			states[queryIndex][candidateIndex] = best
+		}
+	}
+	bestIndex := -1
+	best := fuzzyMatchState{}
+	lastStates := states[len(query)-1]
+	for i, state := range lastStates {
+		if !state.ok {
+			continue
+		}
+		if bestIndex < 0 || betterFuzzyState(state, best, i, bestIndex) {
+			best = state
+			bestIndex = i
+		}
+	}
+	if bestIndex < 0 {
+		return nil, 0, false
+	}
+	positions := make([]int, len(query))
+	for queryIndex, candidateIndex := len(query)-1, bestIndex; queryIndex >= 0; queryIndex-- {
+		positions[queryIndex] = candidateIndex
+		candidateIndex = states[queryIndex][candidateIndex].prev
+	}
+	return positions, best.score, true
+}
+
+func betterFuzzyState(candidate, current fuzzyMatchState, candidateEnd, currentEnd int) bool {
+	if !current.ok {
+		return true
+	}
+	if candidate.score != current.score {
+		return candidate.score > current.score
+	}
+	candidateSpan := candidateEnd - candidate.start
+	currentSpan := currentEnd - current.start
+	if candidateSpan != currentSpan {
+		return candidateSpan < currentSpan
+	}
+	return candidate.start > current.start
+}
+
+func fuzzyCharScore(candidate []rune, position int, basenameStart int) int {
+	score := 16
+	if position >= basenameStart {
+		score += 26
+	}
+	if position == basenameStart {
+		score += 36
+	}
+	if fuzzyBoundary(candidate, position) {
+		score += 28
+	}
+	return score
+}
+
+func fuzzyBoundary(candidate []rune, position int) bool {
+	if position == 0 {
+		return true
+	}
+	switch candidate[position-1] {
+	case '/', '-', '_', '.', ' ':
+		return true
+	default:
+		return false
+	}
+}
+
+func fuzzyLeadingPenalty(position int, basenameStart int) int {
+	if position >= basenameStart {
+		return min(24, position-basenameStart)
+	}
+	return 32 + min(24, position)
+}
+
+func fuzzyGapScore(previous, current int) int {
+	gap := current - previous - 1
+	if gap == 0 {
+		return 90
+	}
+	return -min(48, gap*4)
 }
 
 func renderFuzzyPath(result fileSearchResult) string {
@@ -1186,6 +1497,18 @@ func renderFuzzyPath(result fileSearchResult) string {
 		}
 	}
 	return b.String()
+}
+
+func renderRecentFileResult(result fileSearchResult) string {
+	line := renderFuzzyPath(result)
+	detail := "working tree"
+	if !result.Worktree {
+		detail = shortHash(result.CommitHash)
+		if result.CommitHash == git.UncommittedHash {
+			detail = "uncommitted"
+		}
+	}
+	return line + mutedStyle.Render("  "+detail)
 }
 
 func renderStatusBar(width int, left, center, right string) string {
@@ -1267,42 +1590,102 @@ func (m model) frameInnerWidth() int {
 
 func (m model) panelTitle() string {
 	if m.searchOpen {
-		return " " + titleCase(m.searchTitle()) + " "
+		return m.panelTitleWithDetail(titleCase(m.searchTitle()), m.searchPanelTitleDetail())
 	}
+	title := "View"
 	switch m.mode {
 	case modeCommits:
-		return " Commit View "
+		title = "Commit View"
 	case modeSelect:
-		return " Select Commits "
+		title = "Select Commits"
 	case modeDirectories:
-		return " Directory View "
+		title = "Directory View"
 	case modeFiles:
-		return " Files "
+		title = "Files"
 	case modeDiff:
-		return " Diff View "
+		title = "Diff View"
 	case modeFullFile:
-		return " File View "
+		title = "File View"
 	case modeRequest:
-		return " Request View "
+		title = "Request View"
+	}
+	return m.panelTitleWithDetail(title, m.panelTitleDetail())
+}
+
+func (m model) panelTitleWithDetail(title, detail string) string {
+	if strings.TrimSpace(detail) == "" {
+		return " " + title + " "
+	}
+	return " " + title + " | " + detail + " "
+}
+
+func (m model) searchPanelTitleDetail() string {
+	query := m.searchText
+	if query == "" {
+		query = m.emptySearchHint()
+	}
+	return fmt.Sprintf("%s | %d matches", query, len(m.searchResults))
+}
+
+func (m model) panelTitleDetail() string {
+	switch m.mode {
+	case modeCommits:
+		if len(m.commits) == 0 || m.commitIdx < 0 || m.commitIdx >= len(m.commits) {
+			return "no commits"
+		}
+		commit := m.commits[m.commitIdx]
+		detail := strings.TrimSpace(commit.ShortHash + " " + commit.Subject)
+		if files := m.fileCache[commit.Hash]; len(files) > 0 {
+			detail += fmt.Sprintf(" | %d files", len(files))
+		}
+		return detail
+	case modeSelect:
+		if m.pending != selectActionNone {
+			return "confirm " + m.pendingActionName()
+		}
+		return fmt.Sprintf("%d selected", m.selectedCount())
+	case modeDirectories:
+		entries := m.visibleDirectoryEntries()
+		if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
+			return "no paths"
+		}
+		entry := entries[m.dirIdx]
+		path := entry.Path
+		if entry.IsDir {
+			path += fmt.Sprintf("/ | %d files", entry.FileCount)
+		} else if len(entry.CommitIndexes) > 0 {
+			path += fmt.Sprintf(" | %d changes", len(entry.CommitIndexes))
+		}
+		return path
+	case modeFiles, modeDiff, modeFullFile:
+		if len(m.files) == 0 || m.fileIdx < 0 || m.fileIdx >= len(m.files) {
+			return "no files"
+		}
+		file := m.files[m.fileIdx]
+		if !m.worktreeFile {
+			file = m.fileDisplayName(file, m.currentCommitHash())
+		}
+		if status := m.fileStatus(m.files[m.fileIdx], m.currentCommitHash()); status != "" {
+			file += " | " + status
+		}
+		return file
+	case modeRequest:
+		if req, ok := m.selectedRequest(); ok {
+			return fmt.Sprintf("%s | %s", req.Agent, requestPreviewMessage(req.Message))
+		}
+		return "no requests"
 	default:
-		return " View "
+		return ""
 	}
 }
 
-func (m model) renderPanelFrame(staticTop, body string, height int) string {
+func (m model) renderPanelFrame(body string, height int) string {
 	if m.width <= 0 || height <= 0 {
-		if staticTop == "" {
-			return body
-		}
-		return staticTop + "\n" + body
+		return body
 	}
 	innerWidth := max(1, m.width-2)
 	innerHeight := max(1, height-2)
 	lines := make([]string, 0, innerHeight)
-	if staticTop != "" {
-		lines = append(lines, splitViewLines(staticTop)...)
-		lines = append(lines, mutedStyle.Render(strings.Repeat("─", innerWidth)))
-	}
 	if body != "" {
 		lines = append(lines, splitViewLines(body)...)
 	}
@@ -1348,21 +1731,27 @@ func (m model) commandContextLine() string {
 	if m.searchOpen {
 		return "[Enter] Open  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
 	}
+	if m.gitShortcut == "g" {
+		return "[p] Push  [b d] Delete merged branches  [Esc] Cancel"
+	}
+	if m.gitShortcut == "gb" {
+		return "[d] Delete merged branches  [Esc] Cancel"
+	}
 	switch m.mode {
 	case modeCommits:
-		return "[s] Select  [w] Wrap  [Ctrl+P] Files  [Alt+/] Grep  [?] Help"
+		return "[Ctrl+P] Files  [Ctrl+E] Recent  [Alt+/] Grep  [g p] Push  [g b d] Delete merged  [?] Help"
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return "[y] Confirm  [n/Esc] Cancel  [?] Help"
 		}
 		return "[Space] Select  [x] Delete  [m] Merge  [s] Back  [?] Help"
 	case modeDiff:
-		return "[w] Wrap  [l] Lines  [f] Full file  [/] Find  [Ctrl+P] Files  [Alt+/] Grep"
+		return "[w] Wrap  [l] Lines  [f] Full file  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files"
 	case modeFullFile:
 		if m.worktreeFile {
-			return "[w] Wrap  [l] Lines  [/] Find  [Ctrl+P] Files  [Alt+/] Grep"
+			return "[w] Wrap  [l] Lines  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files"
 		}
-		return "[w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+P] Files  [Alt+/] Grep"
+		return "[w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files"
 	case modeRequest:
 		return "[w] Wrap  [v] Back  [Ctrl+P] Files  [?] Help"
 	}
@@ -1473,6 +1862,16 @@ func emptyFallback(value, fallback string) string {
 	return value
 }
 
+func firstOutputLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
 func titleCase(value string) string {
 	words := strings.Fields(value)
 	for i, word := range words {
@@ -1484,62 +1883,6 @@ func titleCase(value string) string {
 		words[i] = string(runes)
 	}
 	return strings.Join(words, " ")
-}
-
-func (m model) viewCommitDetailsPreview() string {
-	if len(m.commits) == 0 {
-		return ""
-	}
-	commit := m.commits[m.commitIdx]
-	var b strings.Builder
-
-	// Commit Header
-	b.WriteString(titleStyle.Render("Commit Details"))
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.Hash), mutedStyle.Render(commit.Date), commit.Subject))
-	b.WriteString("\n\n")
-
-	// Changed Files Summary
-	files := m.fileCache[commit.Hash]
-	if len(files) > 0 {
-		b.WriteString(markerStyle.Render(fmt.Sprintf("Files (%d):", len(files))))
-		count := min(len(files), 3)
-		for i := 0; i < count; i++ {
-			b.WriteString(" " + fileStyle.Render(files[i]))
-		}
-		if len(files) > count {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf(" ...and %d more", len(files)-count)))
-		}
-		b.WriteString("\n")
-	}
-
-	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... press v for full request")
-}
-
-func (m model) viewFileDetailsPreview() string {
-	if len(m.commits) == 0 || len(m.files) == 0 {
-		return ""
-	}
-	file := m.files[m.fileIdx]
-	status := m.fileStatus(file, m.currentCommitHash())
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("File Preview: ") + fileStyle.Render(file))
-	b.WriteString("\n\n")
-	if status != "" {
-		b.WriteString(m.fileStatusStyle(status).Render(status))
-		b.WriteString("\n\n")
-	}
-	if m.selectedFileIsImage() {
-		b.WriteString(markerStyle.Render("Image file"))
-		b.WriteByte('\n')
-		b.WriteString(mutedStyle.Render("  press Enter to open image, Right for diff"))
-		b.WriteString("\n\n")
-	} else {
-		b.WriteString(mutedStyle.Render("  press Enter/Right for diff"))
-		b.WriteString("\n\n")
-	}
-
-	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "")
 }
 
 func (m model) viewBody(content string, height int, focusLine int) string {
@@ -1576,30 +1919,6 @@ func isImagePath(path string) bool {
 	default:
 		return false
 	}
-}
-
-func (m model) commitPreviewInnerHeight() int {
-	if m.height <= 0 {
-		return 8
-	}
-	return clamp(m.height/4, 5, 10)
-}
-
-func (m model) fitPreviewContent(content string, height int, overflow string) string {
-	lines := splitViewLines(content)
-	contentWidth := max(0, m.frameInnerWidth())
-	overflowLine := mutedStyle.Render(overflow)
-	if len(lines) > height && height > 0 {
-		lines = append([]string(nil), lines[:height]...)
-		lines[height-1] = overflowLine
-	}
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	for i, line := range lines {
-		lines[i] = padPlain(truncateVisible(line, contentWidth), contentWidth)
-	}
-	return strings.Join(lines, "\n")
 }
 
 type helpEntry struct {
@@ -1665,7 +1984,10 @@ func (m model) viewHelpDialog(width int, height int) string {
 
 func (m model) helpEntries() []helpEntry {
 	entries := []helpEntry{
+		{"g p", "Push", "run git push for this repository"},
+		{"g b d", "Delete merged branches", "delete local branches from git branch --merged"},
 		{"ctrl+p", "Files", "fuzzy find a repository file by path"},
+		{"ctrl+e", "Recent", "open a recently viewed file"},
 		{"alt+/", "Grep", "search text across repository files"},
 		{"?", "Close help", "return to the current screen"},
 		{"ctrl+c", "Quit", "exit agentgit immediately"},
@@ -1883,11 +2205,13 @@ func (m *model) enter(openImages bool) tea.Cmd {
 			return nil
 		}
 		if openImages && m.selectedFileIsImage() {
+			m.rememberCurrentFile()
 			return m.openSelectedImage()
 		}
 		if m.worktreeFile {
 			m.loadWorktreeFile()
 			if m.err == nil {
+				m.rememberCurrentFile()
 				m.scroll = 0
 				m.mode = modeFullFile
 			}
@@ -1897,6 +2221,7 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		if m.err != nil {
 			return nil
 		}
+		m.rememberCurrentFile()
 		m.scroll = 0
 		m.mode = modeDiff
 	}
@@ -2409,6 +2734,7 @@ func (m *model) toggleFullFile() {
 	if m.mode == modeDiff {
 		m.loadFullFile()
 		if m.err == nil {
+			m.rememberCurrentFile()
 			m.mode = modeFullFile
 			m.scroll = 0
 		}
@@ -2598,42 +2924,6 @@ func (m model) viewDirectoryList(width int) string {
 	return b.String()
 }
 
-func (m model) viewDirectoryDetailsPreview() string {
-	entries := m.visibleDirectoryEntries()
-	if len(entries) == 0 || m.dirIdx < 0 || m.dirIdx >= len(entries) {
-		return ""
-	}
-	entry := entries[m.dirIdx]
-	var b strings.Builder
-	title := "File Details"
-	path := entry.Path
-	if entry.IsDir {
-		title = "Directory Details"
-		path += "/"
-	}
-	b.WriteString(titleStyle.Render(title))
-	b.WriteString("\n")
-	b.WriteString(fileStyle.Render(path))
-	if entry.IsDir {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  %d files", entry.FileCount)))
-	}
-	b.WriteString("\n\n")
-	if len(entry.CommitIndexes) > 0 {
-		b.WriteString(mutedStyle.Render("Recent changes"))
-		b.WriteString("\n")
-	}
-	count := min(len(entry.CommitIndexes), 4)
-	for i := 0; i < count; i++ {
-		commit := m.commits[entry.CommitIndexes[i]]
-		b.WriteString(fmt.Sprintf("  %s %s  %s\n", hashStyle.Render(commit.ShortHash), mutedStyle.Render(commit.Date), commit.Subject))
-	}
-	if len(entry.CommitIndexes) > count {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ...and %d more commits\n", len(entry.CommitIndexes)-count)))
-	}
-
-	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "  ... enter toggles folders or opens files")
-}
-
 func requestPreviewMessage(message string) string {
 	for _, line := range strings.Split(message, "\n") {
 		if preview := strings.Join(strings.Fields(line), " "); preview != "" {
@@ -2641,62 +2931,6 @@ func requestPreviewMessage(message string) string {
 		}
 	}
 	return ""
-}
-
-func (m model) viewCommitFilePreview(width int) string {
-	if len(m.commits) == 0 {
-		return ""
-	}
-	commit := m.commits[m.commitIdx]
-	files := m.fileCache[commit.Hash]
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Changed files"))
-	b.WriteByte('\n')
-	b.WriteString(hashStyle.Render(commit.ShortHash))
-	b.WriteByte(' ')
-	b.WriteString(truncateVisible(commit.Subject, max(0, width-10)))
-	b.WriteString("\n\n")
-	if len(files) == 0 {
-		b.WriteString(mutedStyle.Render("no changed files"))
-		b.WriteByte('\n')
-		return b.String()
-	}
-	for _, file := range files {
-		b.WriteString(m.renderFileLabel(file, commit.Hash, width, false))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func (m model) viewSelectDetailsPreview() string {
-	var b strings.Builder
-	count := m.selectedCount()
-	b.WriteString(titleStyle.Render("Select Mode"))
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%d commits selected", count))
-	if count > 0 {
-		if commits, err := m.selectedLatestRange(); err == nil {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("  latest %d commits", len(commits))))
-		} else {
-			b.WriteString("  " + mutedStyle.Render(err.Error()))
-		}
-	}
-	b.WriteString("\n\n")
-	if m.pending != selectActionNone {
-		b.WriteString(statusAltStyle.Render("Confirm " + m.pendingActionName()))
-		b.WriteString(" ")
-		b.WriteString(mutedStyle.Render("press y to continue or n/esc to cancel"))
-		b.WriteString("\n")
-	} else {
-		b.WriteString(mutedStyle.Render("space selects commits. delete/merge require a contiguous range starting at HEAD."))
-		b.WriteString("\n")
-	}
-	if m.notice != "" {
-		b.WriteString("\n")
-		b.WriteString(markerStyle.Render(m.notice))
-		b.WriteString("\n")
-	}
-	return m.fitPreviewContent(b.String(), m.commitPreviewInnerHeight(), "")
 }
 
 func (m model) viewFilesList(width int) string {
@@ -2719,8 +2953,44 @@ func (m model) currentCommitHash() string {
 	return m.commits[m.commitIdx].Hash
 }
 
+func (m *model) rememberCurrentFile() {
+	if len(m.files) == 0 || m.fileIdx < 0 || m.fileIdx >= len(m.files) {
+		return
+	}
+	commitHash := ""
+	if !m.worktreeFile {
+		commitHash = m.currentCommitHash()
+		if commitHash == "" {
+			return
+		}
+	}
+	m.rememberRecentFile(m.files[m.fileIdx], commitHash, m.worktreeFile)
+}
+
+func (m *model) rememberRecentFile(path string, commitHash string, worktree bool) {
+	if path == "" {
+		return
+	}
+	entry := recentFile{Path: path, CommitHash: commitHash, Worktree: worktree}
+	recent := []recentFile{entry}
+	for _, existing := range m.recentFiles {
+		if sameRecentFile(existing, entry) {
+			continue
+		}
+		recent = append(recent, existing)
+		if len(recent) >= recentFilesLimit {
+			break
+		}
+	}
+	m.recentFiles = recent
+}
+
+func sameRecentFile(a, b recentFile) bool {
+	return a.Path == b.Path && a.CommitHash == b.CommitHash && a.Worktree == b.Worktree
+}
+
 func (m model) renderFileLabel(file string, commitHash string, width int, selected bool) string {
-	line := fileStyle.Render(file)
+	line := fileStyle.Render(m.fileDisplayName(file, commitHash))
 	if status := m.fileStatus(file, commitHash); status != "" {
 		line += mutedStyle.Render("  ")
 		line += m.fileStatusStyle(status).Render(status)
@@ -2729,6 +2999,21 @@ func (m model) renderFileLabel(file string, commitHash string, width int, select
 		line = cursorStyle.Render(line)
 	}
 	return truncateVisible(line, width)
+}
+
+func (m model) fileDisplayName(file string, commitHash string) string {
+	change := m.fileChange(file, commitHash)
+	if change.Status == "renamed" && change.OldPath != "" && change.OldPath != change.Path {
+		return change.OldPath + " -> " + change.Path
+	}
+	return file
+}
+
+func (m model) fileChange(file string, commitHash string) git.FileChange {
+	if commitHash == "" || m.fileChangeCache == nil {
+		return git.FileChange{}
+	}
+	return m.fileChangeCache[commitHash][file]
 }
 
 func (m model) fileStatus(file string, commitHash string) string {
@@ -2770,30 +3055,6 @@ func (m model) viewFilesBody(height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m model) viewSelectedDiffPreview(width int) string {
-	var b strings.Builder
-	if len(m.commits) == 0 || len(m.files) == 0 {
-		return ""
-	}
-	b.WriteString(titleStyle.Render("Diff preview"))
-	b.WriteByte('\n')
-	b.WriteString(fileStyle.Render(truncateVisible(m.files[m.fileIdx], width)))
-	b.WriteString("\n\n")
-	lines := m.diffLines
-	if m.diffMode == diffSplit {
-		lines = splitDiff(lines, width)
-	}
-	limit := previewLineLimit(m.height)
-	for i, line := range lines {
-		if i >= limit {
-			break
-		}
-		b.WriteString(renderVisibleDiffLine(line, width, m.diffMode == diffSplit))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
 func (m model) viewDiff() string {
 	var b strings.Builder
 	if len(m.commits) == 0 || len(m.files) == 0 {
@@ -2801,7 +3062,7 @@ func (m model) viewDiff() string {
 	}
 	b.WriteString(hashStyle.Render(m.commits[m.commitIdx].ShortHash))
 	b.WriteByte(' ')
-	b.WriteString(fileStyle.Render(m.files[m.fileIdx]))
+	b.WriteString(fileStyle.Render(m.fileDisplayName(m.files[m.fileIdx], m.currentCommitHash())))
 	b.WriteString("\n\n")
 	lines := m.renderedDiffLines()
 	if m.scroll >= len(lines) {
@@ -2849,7 +3110,11 @@ func (m model) viewFullFile() string {
 		b.WriteString(hashStyle.Render(m.commits[m.commitIdx].ShortHash))
 	}
 	b.WriteByte(' ')
-	b.WriteString(fileStyle.Render(m.files[m.fileIdx]))
+	fileName := m.files[m.fileIdx]
+	if !m.worktreeFile {
+		fileName = m.fileDisplayName(fileName, m.currentCommitHash())
+	}
+	b.WriteString(fileStyle.Render(fileName))
 	b.WriteString(" (Full File)\n\n")
 	lines := m.renderedFullFileLines()
 	if m.scroll >= len(lines) {
@@ -3037,20 +3302,32 @@ func (m *model) loadCommitFilesAt(index int) {
 	if m.fileStatusCache == nil {
 		m.fileStatusCache = map[string]map[string]string{}
 	}
+	if m.fileChangeCache == nil {
+		m.fileChangeCache = map[string]map[string]git.FileChange{}
+	}
 	hash := m.commits[index].Hash
 	if _, ok := m.fileCache[hash]; ok {
 		return
 	}
-	files, err := git.ChangedFiles(m.root, hash)
+	changes, err := git.ChangedFileChanges(m.root, hash)
 	if err != nil {
 		m.err = err
 		return
 	}
-	m.fileCache[hash] = files
-	statuses, err := git.ChangedFileStatuses(m.root, hash)
-	if err == nil {
-		m.fileStatusCache[hash] = statuses
+	files := make([]string, 0, len(changes))
+	statuses := make(map[string]string, len(changes))
+	changeByPath := make(map[string]git.FileChange, len(changes))
+	for _, change := range changes {
+		if change.Path == "" {
+			continue
+		}
+		files = append(files, change.Path)
+		statuses[change.Path] = change.Status
+		changeByPath[change.Path] = change
 	}
+	m.fileCache[hash] = files
+	m.fileStatusCache[hash] = statuses
+	m.fileChangeCache[hash] = changeByPath
 }
 
 func (m *model) loadDirectoryEntries() {
@@ -3072,14 +3349,15 @@ func (m *model) loadDirectoryEntries() {
 		currentFiles[file] = true
 		addDirectoryFile(stats, file)
 	}
+	aliases := m.currentPathAliases(currentFiles)
 	for i, commit := range m.commits {
 		m.loadCommitFilesAt(i)
 		if m.err != nil {
 			return
 		}
 		for _, file := range m.fileCache[commit.Hash] {
-			if currentFiles[file] {
-				addDirectoryCommit(stats, file, i)
+			if path := aliases[file]; path != "" {
+				addDirectoryCommit(stats, path, i)
 			}
 		}
 	}
@@ -3120,6 +3398,29 @@ func currentDirectoryFilesFromCache(fileCache map[string][]string) []string {
 	}
 	sort.Strings(files)
 	return files
+}
+
+func (m *model) currentPathAliases(currentFiles map[string]bool) map[string]string {
+	aliases := make(map[string]string, len(currentFiles))
+	for file := range currentFiles {
+		aliases[file] = file
+	}
+	for i := range m.commits {
+		m.loadCommitFilesAt(i)
+		if m.err != nil {
+			return aliases
+		}
+		changes := m.fileChangeCache[m.commits[i].Hash]
+		for _, change := range changes {
+			if change.Status != "renamed" || change.OldPath == "" || change.Path == "" {
+				continue
+			}
+			if currentPath := aliases[change.Path]; currentPath != "" {
+				aliases[change.OldPath] = currentPath
+			}
+		}
+	}
+	return aliases
 }
 
 func addDirectoryFile(stats map[string]*directoryStats, file string) {
@@ -3281,6 +3582,7 @@ func (m *model) enterDirectoryEntry() {
 	if m.err != nil {
 		return
 	}
+	m.rememberCurrentFile()
 	m.mode = modeFullFile
 }
 
@@ -3440,9 +3742,9 @@ func (m model) visibleDiffLines() []string {
 func styleDiffLine(line string, width int) string {
 	switch {
 	case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-		return renderDiffBackground(addLineStyle, line, width)
+		return renderDiffBackground(addLineStyle, strings.TrimPrefix(line, "+"), width)
 	case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-		return renderDiffBackground(delLineStyle, line, width)
+		return renderDiffBackground(delLineStyle, strings.TrimPrefix(line, "-"), width)
 	case strings.HasPrefix(line, "@@"):
 		return hunkStyle.Render(line)
 	default:
@@ -3451,7 +3753,14 @@ func styleDiffLine(line string, width int) string {
 }
 
 func truncateStyledDiffLine(line string, width int) string {
-	return styleDiffLine(truncateVisible(line, width), width)
+	switch {
+	case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+		return renderDiffBackground(addLineStyle, truncateVisible(strings.TrimPrefix(line, "+"), width), width)
+	case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+		return renderDiffBackground(delLineStyle, truncateVisible(strings.TrimPrefix(line, "-"), width), width)
+	default:
+		return styleDiffLine(truncateVisible(line, width), width)
+	}
 }
 
 func renderVisibleDiffLine(line string, width int, split bool) string {
@@ -3800,13 +4109,6 @@ func takeVisibleFromEnd(s string, width int) string {
 		out[i], out[j] = out[j], out[i]
 	}
 	return string(out)
-}
-
-func previewLineLimit(height int) int {
-	if height <= 0 {
-		return 40
-	}
-	return max(5, height-7)
 }
 
 func (m model) modeName() string {
