@@ -270,6 +270,24 @@ func CommitsWithUncommitted(root string, limit int) ([]Commit, error) {
 	return append([]Commit{uncommitted}, commits...), nil
 }
 
+func UnpushedCommits(root string) (map[string]bool, error) {
+	if _, err := Run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err != nil {
+		return map[string]bool{}, nil
+	}
+	out, err := Run(root, "rev-list", "@{upstream}..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	unpushed := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		hash := strings.TrimSpace(line)
+		if hash != "" {
+			unpushed[hash] = true
+		}
+	}
+	return unpushed, nil
+}
+
 func ResetHard(root string, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return errors.New("reset target is empty")

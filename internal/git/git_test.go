@@ -34,6 +34,50 @@ func TestCommitsWithUncommittedAddsWorkingTreeEntryFirst(t *testing.T) {
 	}
 }
 
+func TestUnpushedCommitsReturnsCommitsAheadOfUpstream(t *testing.T) {
+	remote := newTestRepo(t)
+	runGit(t, remote, "config", "receive.denyCurrentBranch", "updateInstead")
+	root := t.TempDir()
+	runGit(t, root, "clone", remote, ".")
+	runGit(t, root, "config", "user.email", "agentgit@example.test")
+	runGit(t, root, "config", "user.name", "agentgit")
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+	runGit(t, root, "push", "-u", "origin", "HEAD")
+	writeFile(t, root, "tracked.txt", "changed\n")
+	runGit(t, root, "commit", "-am", "local")
+	head, err := Head(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unpushed, err := UnpushedCommits(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !unpushed[head] {
+		t.Fatalf("unpushed commits = %+v, missing HEAD %s", unpushed, head)
+	}
+}
+
+func TestUnpushedCommitsWithoutUpstreamReturnsEmptyMap(t *testing.T) {
+	root := newTestRepo(t)
+	writeFile(t, root, "tracked.txt", "base\n")
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "initial")
+
+	unpushed, err := UnpushedCommits(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(unpushed) != 0 {
+		t.Fatalf("unpushed commits = %+v, want empty without upstream", unpushed)
+	}
+}
+
 func TestUncommittedFilesIncludesTrackedAndUntrackedFiles(t *testing.T) {
 	root := newTestRepo(t)
 	writeFile(t, root, "tracked.txt", "base\n")

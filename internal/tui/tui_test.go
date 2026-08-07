@@ -1208,6 +1208,27 @@ func TestWrappedCommitListPreservesLongContentAndFocusLine(t *testing.T) {
 	}
 }
 
+func TestCommitListStylesUnpushedCommitsDifferently(t *testing.T) {
+	m := model{
+		mode: modeCommits,
+		commits: []git.Commit{
+			{Hash: "pushed", ShortHash: "pushed", Date: "06-30 12:34", Subject: "pushed"},
+			{Hash: "local", ShortHash: "local", Date: "06-30 12:35", Subject: "local"},
+		},
+		unpushed: map[string]bool{"local": true},
+	}
+
+	pushed := m.renderCommitHash(m.commits[0])
+	local := m.renderCommitHash(m.commits[1])
+
+	if pushed == local {
+		t.Fatalf("pushed and unpushed hashes use the same rendered style: %q", pushed)
+	}
+	if ansi.Strip(local) != "local" {
+		t.Fatalf("unpushed hash text = %q, want local", ansi.Strip(local))
+	}
+}
+
 func TestWrappedRequestListPreservesLongContentAndFocusLine(t *testing.T) {
 	m := model{
 		wrapLines:  true,

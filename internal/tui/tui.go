@@ -62,6 +62,7 @@ type model struct {
 	head               string
 	limit              int
 	commits            []git.Commit
+	unpushed           map[string]bool
 	requests           []transcript.Request
 	requestsLoading    bool
 	requestsLoadSeq    int
@@ -174,6 +175,7 @@ const (
 
 var (
 	hashStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	unpushedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	providerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	requestStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
@@ -203,6 +205,10 @@ func Run(root string, limit int) error {
 	if err != nil {
 		return err
 	}
+	unpushed, err := git.UnpushedCommits(root)
+	if err != nil {
+		return err
+	}
 	if _, err := store.Init(); err != nil {
 		return err
 	}
@@ -216,6 +222,7 @@ func Run(root string, limit int) error {
 		head:               git.ShortHead(root),
 		limit:              limit,
 		commits:            commits,
+		unpushed:           unpushed,
 		requestsLoading:    true,
 		requestsLoadSeq:    1,
 		requestsCmdContext: ctx,
@@ -2309,9 +2316,15 @@ func (m *model) refresh() tea.Cmd {
 		m.err = err
 		return nil
 	}
+	unpushed, err := git.UnpushedCommits(m.root)
+	if err != nil {
+		m.err = err
+		return nil
+	}
 	m.branch = git.Branch(m.root)
 	m.head = git.ShortHead(m.root)
 	m.commits = commits
+	m.unpushed = unpushed
 	m.fileCache = map[string][]string{}
 	m.fileStatusCache = map[string]map[string]string{}
 	m.invalidateMutableRenderedCaches(previousHead)
@@ -2798,7 +2811,7 @@ func (m model) viewSelectList(width int) string {
 		if commit.Hash == git.UncommittedHash {
 			box = "[-]"
 		}
-		line := fmt.Sprintf("%s %s %s  %s", markerStyle.Render(box), hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
+		line := fmt.Sprintf("%s %s %s  %s", markerStyle.Render(box), m.renderCommitHash(commit), commit.Date, commit.Subject)
 		m.renderListLine(&b, line, width, i == m.commitIdx)
 	}
 	return b.String()
@@ -2859,7 +2872,14 @@ func (m model) viewRequestDrawer(height int) string {
 }
 
 func (m model) commitListLine(commit git.Commit) string {
-	return fmt.Sprintf("%s %s  %s", hashStyle.Render(commit.ShortHash), commit.Date, commit.Subject)
+	return fmt.Sprintf("%s %s  %s", m.renderCommitHash(commit), commit.Date, commit.Subject)
+}
+
+func (m model) renderCommitHash(commit git.Commit) string {
+	if m.unpushed[commit.Hash] {
+		return unpushedStyle.Render(commit.ShortHash)
+	}
+	return hashStyle.Render(commit.ShortHash)
 }
 
 func (m model) requestListLine(req transcript.Request) string {
