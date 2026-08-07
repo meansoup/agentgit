@@ -181,8 +181,10 @@ var (
 	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	dirStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
-	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#116329")).Background(lipgloss.Color("#dafbe1"))
-	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#82071e")).Background(lipgloss.Color("#ffebe9"))
+	addLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Background(lipgloss.Color("22"))
+	delLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Background(lipgloss.Color("52"))
+	diffAddStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f6fc")).Background(lipgloss.Color("#12261e"))
+	diffDelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f6fc")).Background(lipgloss.Color("#25181c"))
 	hunkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	cursorStyle    = lipgloss.NewStyle().Reverse(true)
 	titleStyle     = lipgloss.NewStyle().Bold(true)
@@ -3762,9 +3764,9 @@ func (m model) visibleDiffLines() []string {
 func styleDiffLine(line string, width int) string {
 	switch {
 	case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-		return renderDiffBackground(addLineStyle, strings.TrimPrefix(line, "+"), width)
+		return renderDiffBackground(diffAddStyle, strings.TrimPrefix(line, "+"), width)
 	case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-		return renderDiffBackground(delLineStyle, strings.TrimPrefix(line, "-"), width)
+		return renderDiffBackground(diffDelStyle, strings.TrimPrefix(line, "-"), width)
 	case strings.HasPrefix(line, "@@"):
 		return hunkStyle.Render(line)
 	default:
@@ -3775,9 +3777,9 @@ func styleDiffLine(line string, width int) string {
 func truncateStyledDiffLine(line string, width int) string {
 	switch {
 	case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-		return renderDiffBackground(addLineStyle, truncateVisible(strings.TrimPrefix(line, "+"), width), width)
+		return renderDiffBackground(diffAddStyle, truncateVisible(strings.TrimPrefix(line, "+"), width), width)
 	case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-		return renderDiffBackground(delLineStyle, truncateVisible(strings.TrimPrefix(line, "-"), width), width)
+		return renderDiffBackground(diffDelStyle, truncateVisible(strings.TrimPrefix(line, "-"), width), width)
 	default:
 		return styleDiffLine(truncateVisible(line, width), width)
 	}
@@ -3891,10 +3893,10 @@ func formatSplitNumbered(left, right string, leftNumber, rightNumber, leftWidth,
 	leftCell := formatNumberedCell(left, leftNumber, leftWidth, showNumbers, numberWidth)
 	rightCell := formatNumberedCell(right, rightNumber, rightWidth, showNumbers, numberWidth)
 	if leftChanged {
-		leftCell = delLineStyle.Render(leftCell)
+		leftCell = diffDelStyle.Render(leftCell)
 	}
 	if rightChanged {
-		rightCell = addLineStyle.Render(rightCell)
+		rightCell = diffAddStyle.Render(rightCell)
 	}
 	if rightWidth <= 0 {
 		return leftCell
