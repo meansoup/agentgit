@@ -178,6 +178,7 @@ var (
 	unpushedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	providerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	requestStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	responseStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	markerStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	fileStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	dirStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
@@ -2733,7 +2734,17 @@ func (m model) viewRequestFull() string {
 		}
 		b.WriteByte('\n')
 	}
+	b.WriteString(mutedStyle.Render("Request"))
+	b.WriteString("\n")
 	b.WriteString(requestStyle.Render(req.Message))
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render("Response"))
+	b.WriteString("\n")
+	if req.Response != "" {
+		b.WriteString(responseStyle.Render(req.Response))
+	} else {
+		b.WriteString(mutedStyle.Render("No captured response text"))
+	}
 
 	lines := splitViewLines(b.String())
 	if m.wrapLines {
@@ -2893,6 +2904,10 @@ func (m model) requestListLine(req transcript.Request) string {
 	b.WriteString(providerStyle.Render(fmt.Sprintf("[%s %s]", req.Agent, emptyFallback(req.Model, "unknown"))))
 	b.WriteString(" ")
 	b.WriteString(requestStyle.Render(requestPreviewMessage(req.Message)))
+	if response := requestPreviewMessage(req.Response); response != "" {
+		b.WriteString(mutedStyle.Render(" -> "))
+		b.WriteString(responseStyle.Render(response))
+	}
 	return b.String()
 }
 

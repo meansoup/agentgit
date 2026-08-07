@@ -1139,7 +1139,7 @@ func TestRequestDrawerEnterOpensFullRequest(t *testing.T) {
 		mode:          modeCommits,
 		requestDrawer: true,
 		requests: []transcript.Request{
-			{ID: "7", Agent: "claude", Model: "sonnet", Message: "full request body", Timestamp: "2026-06-25T00:00:00Z", EditedFiles: []string{"README.md"}},
+			{ID: "7", Agent: "claude", Model: "sonnet", Message: "full request body", Response: "full response body", Timestamp: "2026-06-25T00:00:00Z", EditedFiles: []string{"README.md"}},
 		},
 		width:  80,
 		height: 24,
@@ -1155,7 +1155,7 @@ func TestRequestDrawerEnterOpensFullRequest(t *testing.T) {
 		t.Fatalf("requestReturn = %v, want modeCommits", got.requestReturn)
 	}
 	view := ansi.Strip(got.viewRequestFull())
-	for _, want := range []string{"claude", "sonnet", "README.md", "full request body"} {
+	for _, want := range []string{"claude", "sonnet", "README.md", "Request", "full request body", "Response", "full response body"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("request full view missing %q:\n%s", want, view)
 		}
@@ -1170,6 +1170,7 @@ func TestRequestListRendersBulletTimeAgentAndRequest(t *testing.T) {
 				Agent:     "claude",
 				Model:     "sonnet",
 				Message:   "full request body",
+				Response:  "full response summary",
 				Timestamp: "2026-06-25T13:14:15Z",
 			},
 		},
@@ -1178,7 +1179,7 @@ func TestRequestListRendersBulletTimeAgentAndRequest(t *testing.T) {
 
 	view := ansi.Strip(m.viewRequestsList(120))
 
-	if !strings.Contains(view, "● 06-25 13:14 [claude sonnet] full request body") {
+	if !strings.Contains(view, "● 06-25 13:14 [claude sonnet] full request body -> full response summary") {
 		t.Fatalf("request list row missing expected format:\n%s", view)
 	}
 }

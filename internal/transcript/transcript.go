@@ -21,6 +21,7 @@ type Request struct {
 	Agent       string
 	Model       string
 	Message     string
+	Response    string
 	RepoRoot    string
 	SessionID   string
 	TurnID      string
@@ -341,6 +342,9 @@ func parseClaudeRecord(record map[string]any, state *parseState, source string) 
 			})
 		}
 	}
+	if record["type"] == "assistant" && state.repoMatched {
+		state.addResponse(claudeAssistantText(message["content"]))
+	}
 	for _, file := range claudeEditedFiles(message["content"]) {
 		state.addEditedFile(file)
 	}
@@ -380,6 +384,7 @@ func parseCodexRecord(record map[string]any, state *parseState, source string) {
 				state.current.Model = model
 			}
 		}
+		state.addResponse(codexAssistantText(payload))
 		for _, file := range codexEditedFiles(payload) {
 			state.addEditedFile(file)
 		}
@@ -413,6 +418,9 @@ func parseGeminiJSONLRecord(record map[string]any, state *parseState, source str
 				SourcePath: source,
 			})
 		}
+	}
+	if typ != "user" && state.repoMatched {
+		state.addResponse(geminiAssistantText(record))
 	}
 	for _, file := range geminiEditedFiles(record["toolCalls"]) {
 		state.addEditedFile(file)
@@ -459,6 +467,7 @@ func scanGeminiChat(path, repoRoot string) ([]Request, error) {
 				state.current.Model = model
 			}
 		}
+		state.addResponse(geminiAssistantText(record))
 		for _, file := range geminiEditedFiles(record["toolCalls"]) {
 			state.addEditedFile(file)
 		}
@@ -518,10 +527,25 @@ func (s *parseState) addEditedFile(path string) {
 	s.current.EditedFiles = append(s.current.EditedFiles, path)
 }
 
+func (s *parseState) addResponse(text string) {
+	if s.current == nil {
+		return
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if s.current.Response != "" {
+		s.current.Response += "\n\n"
+	}
+	s.current.Response += text
+}
+
 func finalizeRequest(req *Request) {
 	req.Agent = strings.TrimSpace(req.Agent)
 	req.Model = strings.TrimSpace(req.Model)
 	req.Message = strings.TrimSpace(req.Message)
+	req.Response = strings.TrimSpace(req.Response)
 	req.SessionID = strings.TrimSpace(req.SessionID)
 	req.TurnID = strings.TrimSpace(req.TurnID)
 	req.Timestamp = strings.TrimSpace(req.Timestamp)
@@ -533,6 +557,18 @@ func finalizeRequest(req *Request) {
 }
 
 func claudeUserText(content any) string {
+	return transcriptContentText(content, "text")
+}
+
+func claudeAssistantText(content any) string {
+	return transcriptContentText(content, "text")
+}
+
+func transcriptContentText(content any, allowedTypes ...string) string {
+	allowed := map[string]bool{}
+	for _, typ := range allowedTypes {
+		allowed[typ] = true
+	}
 	switch v := content.(type) {
 	case string:
 		return strings.TrimSpace(v)
@@ -540,7 +576,10 @@ func claudeUserText(content any) string {
 		var parts []string
 		for _, item := range v {
 			obj, ok := item.(map[string]any)
-			if !ok || obj["type"] != "text" {
+			if !ok {
+				continue
+			}
+			if len(allowed) > 0 && !allowed[strings.ToLower(stringValue(obj, "type"))] {
 				continue
 			}
 			if text := strings.TrimSpace(stringValue(obj, "text")); text != "" {
@@ -593,6 +632,18 @@ func codexEditedFiles(payload map[string]any) []string {
 	}
 }
 
+func codexAssistantText(payload map[string]any) string {
+	typ := strings.ToLower(stringValue(payload, "type"))
+	role := strings.ToLower(stringValue(payload, "role"))
+	if role != "assistant" && typ != "assistant_message" {
+		return ""
+	}
+	if text := transcriptContentText(payload["content"], "output_text", "text"); text != "" {
+		return text
+	}
+	return strings.TrimSpace(firstString(payload, "message", "text"))
+}
+
 func geminiEditedFiles(toolCalls any) []string {
 	items, _ := toolCalls.([]any)
 	var files []string
@@ -628,24 +679,16 @@ func patchFiles(text string) []string {
 }
 
 func geminiContentText(content any) string {
-	switch v := content.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case []any:
-		var parts []string
-		for _, item := range v {
-			obj, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			if text := strings.TrimSpace(stringValue(obj, "text")); text != "" {
-				parts = append(parts, text)
-			}
+	return transcriptContentText(content)
+}
+
+func geminiAssistantText(record map[string]any) string {
+	for _, key := range []string{"content", "text", "message"} {
+		if text := transcriptContentText(record[key]); text != "" {
+			return text
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n\n"))
-	default:
-		return ""
 	}
+	return ""
 }
 
 func jsonFiles(root, suffix string) ([]string, error) {
