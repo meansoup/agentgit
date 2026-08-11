@@ -1,6 +1,6 @@
 # agentgit
 
-**agentgit**은 읽기 전용 Git 및 AI 에이전트 트랜스크립트 브라우저입니다. 에이전트(`codex`, `gemini`, `claude`)는 기존처럼 사용하고, 저장소에서 `agentgit`을 실행하면 Git 히스토리와 로컬 트랜스크립트에 실제로 남아 있는 request 프롬프트를 함께 볼 수 있습니다.
+**agentgit**은 Git을 이해하는 AI 에이전트 작업 공간입니다. Git 히스토리와 로컬 에이전트 트랜스크립트를 탐색할 수 있고, tmux처럼 하단 한 줄 command bar를 유지하는 터미널 래퍼 안에서 에이전트 CLI를 실행할 수 있습니다.
 
 [English Docs (README.md)](./README.md)
 
@@ -19,6 +19,20 @@
 | `agentgit` | 현재 디렉토리의 히스토리 브라우저를 엽니다. |
 | `agentgit [path]` | 특정 저장소, 폴더 또는 파일의 히스토리를 확인합니다. |
 | `agentgit --limit 50` | 표시할 커밋 개수를 제한합니다. |
+| `agentgit terminal` | `codex`, `claude`, `gemini` 중 먼저 발견되는 에이전트 CLI를 래퍼 안에서 실행합니다. |
+| `agentgit terminal -- codex` | 특정 명령을 래퍼 안에서 실행합니다. |
+
+## 터미널 래퍼
+
+`agentgit terminal`은 현재 저장소에서 에이전트 CLI를 PTY로 실행합니다. 에이전트는 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 prefix 명령 표시용으로 유지합니다.
+
+- **Prefix 키**: `Ctrl+G`
+- **도움말**: `Ctrl+G` 다음 `?`
+- **Status line 다시 그리기**: `Ctrl+G` 다음 `r`
+- **에이전트로 Ctrl+G 직접 보내기**: `Ctrl+G` 다음 `g`
+- **래퍼 종료 및 에이전트 프로세스 종료**: `Ctrl+G` 다음 `q`
+
+명령을 지정하지 않으면 `AGENTGIT_AGENT` 환경 변수를 먼저 사용하고, 없으면 `codex`, `claude`, `gemini` 순서로 찾습니다.
 
 ## TUI 조작법
 

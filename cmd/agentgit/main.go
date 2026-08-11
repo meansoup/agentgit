@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/minkuik/agentgit/internal/git"
+	"github.com/minkuik/agentgit/internal/terminal"
 	"github.com/minkuik/agentgit/internal/tui"
 )
 
@@ -34,6 +35,8 @@ func run(args []string) error {
 	case "version", "--version":
 		fmt.Println("agentgit", version)
 		return nil
+	case "terminal", "term":
+		return cmdTerminal(args[1:])
 	default:
 		return cmdBrowse(args)
 	}
@@ -42,11 +45,13 @@ func run(args []string) error {
 func usage() {
 	fmt.Println(`usage:
   agentgit [--limit 500] [path]
+  agentgit terminal [--] [agent-command ...]
   agentgit version
 
 commands:
   agentgit                             browse git history and local agent transcripts for the current path
   agentgit <path>                      browse git history and local agent transcripts for a path
+  terminal                             run an agent CLI inside agentgit's terminal wrapper
   version                              print version`)
 }
 
@@ -74,4 +79,18 @@ func cmdBrowse(args []string) error {
 		return err
 	}
 	return tui.Run(root, *limit)
+}
+
+func cmdTerminal(args []string) error {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	root, err := git.RepoRoot(".")
+	if err != nil {
+		return err
+	}
+	return terminal.Run(terminal.Config{
+		Root:    root,
+		Command: args,
+	})
 }

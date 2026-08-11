@@ -1,6 +1,6 @@
 # agentgit
 
-**agentgit** is a read-only Git and AI-agent transcript browser. Run your agent CLI (`codex`, `gemini`, `claude`) as usual, then run `agentgit` in a repository to browse Git history plus request prompts that are already present in local agent transcripts.
+**agentgit** is a Git-aware AI-agent workspace. It can browse Git history plus local agent transcripts, and it can run an agent CLI inside a tmux-like terminal wrapper with a persistent one-line command bar.
 
 [한국어 문서 (README_ko.md)](./README_ko.md)
 
@@ -19,6 +19,20 @@
 | `agentgit` | Open the history browser for the current directory. |
 | `agentgit [path]` | Browse history for a specific repo, folder, or file. |
 | `agentgit --limit 50` | Limit the number of commits shown. |
+| `agentgit terminal` | Run the first available agent CLI from `codex`, `claude`, or `gemini` inside the wrapper. |
+| `agentgit terminal -- codex` | Run a specific command inside the wrapper. |
+
+## Terminal Wrapper
+
+`agentgit terminal` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for prefix commands.
+
+- **Prefix key**: `Ctrl+G`
+- **Help**: `Ctrl+G`, then `?`
+- **Redraw status**: `Ctrl+G`, then `r`
+- **Send literal Ctrl+G to the agent**: `Ctrl+G`, then `g`
+- **Quit wrapper and terminate the agent process**: `Ctrl+G`, then `q`
+
+If no command is provided, `agentgit terminal` uses `AGENTGIT_AGENT` when set, otherwise it tries `codex`, `claude`, then `gemini`.
 
 ## TUI Navigation
 
