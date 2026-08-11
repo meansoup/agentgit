@@ -23,10 +23,10 @@ func main() {
 
 func run(args []string) error {
 	if len(args) > 0 && args[0] == "--" {
-		args = args[1:]
+		return cmdTerminal(args[1:])
 	}
 	if len(args) == 0 {
-		return cmdBrowse(nil)
+		return cmdTerminal(nil)
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -35,23 +35,28 @@ func run(args []string) error {
 	case "version", "--version":
 		fmt.Println("agentgit", version)
 		return nil
+	case "browse", "commits":
+		return cmdBrowse(args[1:])
 	case "terminal", "term":
 		return cmdTerminal(args[1:])
 	default:
-		return cmdBrowse(args)
+		return cmdTerminal(args)
 	}
 }
 
 func usage() {
 	fmt.Println(`usage:
-  agentgit [--limit 500] [path]
+  agentgit
+  agentgit [--] [agent-command ...]
+  agentgit browse [--limit 500] [path]
   agentgit terminal [--] [agent-command ...]
   agentgit version
 
 commands:
-  agentgit                             browse git history and local agent transcripts for the current path
-  agentgit <path>                      browse git history and local agent transcripts for a path
-  terminal                             run an agent CLI inside agentgit's terminal wrapper
+  agentgit                             run an agent CLI inside agentgit's terminal wrapper
+  agentgit -- codex                    run a specific agent command inside the wrapper
+  browse                               open the Git history and transcript browser directly
+  terminal                             alias for the default terminal wrapper
   version                              print version`)
 }
 

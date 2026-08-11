@@ -7,7 +7,7 @@
 ## 빠른 시작
 
 1. **설치**: `agentgit` 바이너리를 `PATH` 경로에 추가합니다.
-2. **사용**: 에이전트(예: `codex`)를 평소처럼 사용한 뒤, 저장소에서 실행합니다.
+2. **사용**: 저장소에서 `agentgit`을 실행하면 tmux 같은 래퍼 안에서 에이전트 CLI가 시작됩니다.
    ```sh
    agentgit
    ```
@@ -16,15 +16,15 @@
 
 | 명령어 | 설명 |
 | :--- | :--- |
-| `agentgit` | 현재 디렉토리의 히스토리 브라우저를 엽니다. |
-| `agentgit [path]` | 특정 저장소, 폴더 또는 파일의 히스토리를 확인합니다. |
-| `agentgit --limit 50` | 표시할 커밋 개수를 제한합니다. |
-| `agentgit terminal` | `codex`, `claude`, `gemini` 중 먼저 발견되는 에이전트 CLI를 래퍼 안에서 실행합니다. |
-| `agentgit terminal -- codex` | 특정 명령을 래퍼 안에서 실행합니다. |
+| `agentgit` | `codex`, `claude`, `gemini` 중 먼저 발견되는 에이전트 CLI를 래퍼 안에서 실행합니다. |
+| `agentgit -- codex` | 특정 명령을 래퍼 안에서 실행합니다. |
+| `agentgit browse` | 현재 디렉토리의 히스토리 브라우저를 엽니다. |
+| `agentgit browse [path]` | 특정 저장소, 폴더 또는 파일의 히스토리를 확인합니다. |
+| `agentgit browse --limit 50` | 브라우저에 표시할 커밋 개수를 제한합니다. |
 
 ## 터미널 래퍼
 
-`agentgit terminal`은 현재 저장소에서 에이전트 CLI를 PTY로 실행합니다. 에이전트는 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 prefix 명령 표시용으로 유지합니다.
+`agentgit`은 현재 저장소에서 에이전트 CLI를 PTY로 실행합니다. 에이전트는 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 prefix 명령 표시용으로 유지합니다.
 
 - **Prefix 키**: `Ctrl+G`
 - **커밋 브라우저 열기**: `Ctrl+G` 다음 `c`

@@ -7,7 +7,7 @@
 ## Quick Start
 
 1. **Install**: Place the `agentgit` binary in your `PATH`.
-2. **Use**: Run your agent normally (e.g., `codex`). Then browse the repository:
+2. **Use**: Run `agentgit` in a repository to start your agent CLI inside the tmux-like wrapper:
    ```sh
    agentgit
    ```
@@ -16,15 +16,15 @@
 
 | Command | Description |
 | :--- | :--- |
-| `agentgit` | Open the history browser for the current directory. |
-| `agentgit [path]` | Browse history for a specific repo, folder, or file. |
-| `agentgit --limit 50` | Limit the number of commits shown. |
-| `agentgit terminal` | Run the first available agent CLI from `codex`, `claude`, or `gemini` inside the wrapper. |
-| `agentgit terminal -- codex` | Run a specific command inside the wrapper. |
+| `agentgit` | Run the first available agent CLI from `codex`, `claude`, or `gemini` inside the wrapper. |
+| `agentgit -- codex` | Run a specific command inside the wrapper. |
+| `agentgit browse` | Open the history browser for the current directory. |
+| `agentgit browse [path]` | Browse history for a specific repo, folder, or file. |
+| `agentgit browse --limit 50` | Limit the number of commits shown in the browser. |
 
 ## Terminal Wrapper
 
-`agentgit terminal` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for prefix commands.
+`agentgit` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for prefix commands.
 
 - **Prefix key**: `Ctrl+G`
 - **Open commit browser**: `Ctrl+G`, then `c`
@@ -33,7 +33,7 @@
 - **Send literal Ctrl+G to the agent**: `Ctrl+G`, then `g`
 - **Quit wrapper and terminate the agent process**: `Ctrl+G`, then `q`
 
-If no command is provided, `agentgit terminal` uses `AGENTGIT_AGENT` when set, otherwise it tries `codex`, `claude`, then `gemini`.
+If no command is provided, `agentgit` uses `AGENTGIT_AGENT` when set, otherwise it tries `codex`, `claude`, then `gemini`.
 
 ## TUI Navigation
 
