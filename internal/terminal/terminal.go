@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/creack/pty"
+	"github.com/minkuik/agentgit/internal/tui"
 	"golang.org/x/term"
 )
 
@@ -25,20 +26,31 @@ const (
 type Config struct {
 	Root    string
 	Command []string
+	Limit   int
 }
 
 type session struct {
-	root    string
-	command []string
-	ptmx    *os.File
-	process *os.Process
-	mu      sync.Mutex
-	width   int
-	height  int
-	prefix  bool
-	help    bool
-	status  string
+	root     string
+	command  []string
+	limit    int
+	ptmx     *os.File
+	process  *os.Process
+	mu       sync.Mutex
+	cond     *sync.Cond
+	width    int
+	height   int
+	prefix   bool
+	help     bool
+	paused   bool
+	status   string
+	actionCh chan action
 }
+
+type action int
+
+const (
+	actionCommitView action = iota + 1
+)
 
 func Run(config Config) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -63,14 +75,19 @@ func Run(config Config) error {
 	if err != nil {
 		return err
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	defer func() {
+		_ = term.Restore(int(os.Stdin.Fd()), oldState)
+	}()
 
 	s := &session{
-		root:    root,
-		command: command,
-		width:   width,
-		height:  height,
+		root:     root,
+		command:  command,
+		limit:    defaultLimit(config.Limit),
+		width:    width,
+		height:   height,
+		actionCh: make(chan action, 4),
 	}
+	s.cond = sync.NewCond(&s.mu)
 	s.enterScreen()
 	defer s.leaveScreen()
 
@@ -101,17 +118,31 @@ func Run(config Config) error {
 	go s.copyInput(done)
 	go s.watchResize(done)
 
-	err = <-waitCh
-	s.drawStatus("process exited")
-	time.Sleep(80 * time.Millisecond)
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return fmt.Errorf("%s exited: %w", command[0], err)
+	for {
+		select {
+		case err = <-waitCh:
+			s.drawStatus("process exited")
+			time.Sleep(80 * time.Millisecond)
+			if err != nil {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
+					return fmt.Errorf("%s exited: %w", command[0], err)
+				}
+				return err
+			}
+			return nil
+		case action := <-s.actionCh:
+			switch action {
+			case actionCommitView:
+				if err := s.openCommitView(&oldState); err != nil {
+					s.drawStatus("commit view failed: " + err.Error())
+				} else {
+					s.drawStatus("returned from commits")
+				}
+				s.setPaused(false)
+			}
 		}
-		return err
 	}
-	return nil
 }
 
 func runPlain(config Config) error {
@@ -167,13 +198,14 @@ func (s *session) leaveScreen() {
 func (s *session) copyPTY(done <-chan struct{}) {
 	buf := make([]byte, 32*1024)
 	for {
-		select {
-		case <-done:
+		if s.waitIfPaused(done) {
 			return
-		default:
 		}
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
+			if s.waitIfPaused(done) {
+				return
+			}
 			s.mu.Lock()
 			_, _ = os.Stdout.Write(buf[:n])
 			s.drawStatusLocked("")
@@ -188,10 +220,8 @@ func (s *session) copyPTY(done <-chan struct{}) {
 func (s *session) copyInput(done <-chan struct{}) {
 	buf := make([]byte, 4096)
 	for {
-		select {
-		case <-done:
+		if s.waitIfPaused(done) {
 			return
-		default:
 		}
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
@@ -234,6 +264,10 @@ func (s *session) handlePrefixKey(key byte) {
 	case '?', 'h':
 		s.toggleHelp()
 		s.drawStatus("")
+	case 'c':
+		s.setPaused(true)
+		s.drawStatus("opening commits...")
+		s.actionCh <- actionCommitView
 	case 'r':
 		s.drawStatus("redrawn")
 	case 'g', ctrlG:
@@ -256,6 +290,24 @@ func (s *session) terminateProcess() {
 	_ = s.process.Signal(syscall.SIGTERM)
 	time.Sleep(700 * time.Millisecond)
 	_ = s.process.Kill()
+}
+
+func (s *session) openCommitView(oldState **term.State) error {
+	s.leaveScreen()
+	if *oldState != nil {
+		_ = term.Restore(int(os.Stdin.Fd()), *oldState)
+	}
+	err := tui.Run(s.root, s.limit)
+	newState, rawErr := term.MakeRaw(int(os.Stdin.Fd()))
+	if rawErr == nil {
+		*oldState = newState
+	}
+	s.enterScreen()
+	s.resizePTY()
+	if rawErr != nil {
+		return rawErr
+	}
+	return err
 }
 
 func (s *session) watchResize(done <-chan struct{}) {
@@ -281,6 +333,17 @@ func (s *session) resize() {
 	s.width = width
 	s.height = height
 	s.drawStatusLocked("resized")
+	s.mu.Unlock()
+	s.resizePTY()
+}
+
+func (s *session) resizePTY() {
+	if s.ptmx == nil {
+		return
+	}
+	s.mu.Lock()
+	width := s.width
+	height := s.height
 	s.mu.Unlock()
 	_ = pty.Setsize(s.ptmx, &pty.Winsize{
 		Rows: uint16(max(1, height-1)),
@@ -326,7 +389,7 @@ func (s *session) statusLine() string {
 	left := fmt.Sprintf(" agentgit:%s  %s  %s ", mode, emptyFallback(cwd, "."), emptyFallback(command, "agent"))
 	right := " Ctrl-G ? help "
 	if s.help || s.prefix {
-		right = " Ctrl-G: q quit | r redraw | g send Ctrl-G | ? help "
+		right = " Ctrl-G: c commits | q quit | r redraw | g send Ctrl-G | ? help "
 	}
 	if s.status != "" {
 		right = " " + s.status + " |" + right
@@ -402,6 +465,13 @@ func max(a, b int) int {
 	return b
 }
 
+func defaultLimit(limit int) int {
+	if limit > 0 {
+		return limit
+	}
+	return 500
+}
+
 func (s *session) prefixActive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -412,6 +482,34 @@ func (s *session) setPrefix(active bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prefix = active
+}
+
+func (s *session) waitIfPaused(done <-chan struct{}) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for s.paused {
+		select {
+		case <-done:
+			return true
+		default:
+		}
+		s.cond.Wait()
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) setPaused(paused bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paused = paused
+	if !paused {
+		s.cond.Broadcast()
+	}
 }
 
 func (s *session) toggleHelp() {

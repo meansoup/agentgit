@@ -27,6 +27,7 @@
 `agentgit terminal`은 현재 저장소에서 에이전트 CLI를 PTY로 실행합니다. 에이전트는 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 prefix 명령 표시용으로 유지합니다.
 
 - **Prefix 키**: `Ctrl+G`
+- **커밋 브라우저 열기**: `Ctrl+G` 다음 `c`
 - **도움말**: `Ctrl+G` 다음 `?`
 - **Status line 다시 그리기**: `Ctrl+G` 다음 `r`
 - **에이전트로 Ctrl+G 직접 보내기**: `Ctrl+G` 다음 `g`

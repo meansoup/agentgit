@@ -27,6 +27,7 @@
 `agentgit terminal` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for prefix commands.
 
 - **Prefix key**: `Ctrl+G`
+- **Open commit browser**: `Ctrl+G`, then `c`
 - **Help**: `Ctrl+G`, then `?`
 - **Redraw status**: `Ctrl+G`, then `r`
 - **Send literal Ctrl+G to the agent**: `Ctrl+G`, then `g`
