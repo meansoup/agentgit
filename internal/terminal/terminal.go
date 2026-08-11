@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/creack/pty"
-	"github.com/minkuik/agentgit/internal/tui"
 	"golang.org/x/term"
 )
 
@@ -43,7 +43,7 @@ type session struct {
 	help     bool
 	paused   bool
 	status   string
-	actionCh chan action
+	actionCh chan actionRequest
 }
 
 type action int
@@ -51,6 +51,11 @@ type action int
 const (
 	actionCommitView action = iota + 1
 )
+
+type actionRequest struct {
+	action action
+	done   chan struct{}
+}
 
 func Run(config Config) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -85,7 +90,7 @@ func Run(config Config) error {
 		limit:    defaultLimit(config.Limit),
 		width:    width,
 		height:   height,
-		actionCh: make(chan action, 4),
+		actionCh: make(chan actionRequest),
 	}
 	s.cond = sync.NewCond(&s.mu)
 	s.enterScreen()
@@ -131,8 +136,8 @@ func Run(config Config) error {
 				return err
 			}
 			return nil
-		case action := <-s.actionCh:
-			switch action {
+		case request := <-s.actionCh:
+			switch request.action {
 			case actionCommitView:
 				if err := s.openCommitView(&oldState); err != nil {
 					s.drawStatus("commit view failed: " + err.Error())
@@ -141,6 +146,7 @@ func Run(config Config) error {
 				}
 				s.setPaused(false)
 			}
+			close(request.done)
 		}
 	}
 }
@@ -267,7 +273,9 @@ func (s *session) handlePrefixKey(key byte) {
 	case 'c':
 		s.setPaused(true)
 		s.drawStatus("opening commits...")
-		s.actionCh <- actionCommitView
+		done := make(chan struct{})
+		s.actionCh <- actionRequest{action: actionCommitView, done: done}
+		<-done
 	case 'r':
 		s.drawStatus("redrawn")
 	case 'g', ctrlG:
@@ -287,27 +295,56 @@ func (s *session) terminateProcess() {
 	if s.process == nil {
 		return
 	}
-	_ = s.process.Signal(syscall.SIGTERM)
+	_ = s.signalAgent(syscall.SIGTERM)
 	time.Sleep(700 * time.Millisecond)
-	_ = s.process.Kill()
+	_ = s.signalAgent(syscall.SIGKILL)
 }
 
-func (s *session) openCommitView(oldState **term.State) error {
+func (s *session) signalAgent(signal syscall.Signal) error {
+	if s.process == nil {
+		return nil
+	}
+	pid := s.process.Pid
+	if pid <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pid, signal); err == nil {
+		return nil
+	}
+	return s.process.Signal(signal)
+}
+
+func (s *session) openCommitView(oldState **term.State) (returnErr error) {
+	_ = s.signalAgent(syscall.SIGSTOP)
+	defer func() {
+		_ = s.signalAgent(syscall.SIGCONT)
+	}()
+
 	s.leaveScreen()
 	if *oldState != nil {
 		_ = term.Restore(int(os.Stdin.Fd()), *oldState)
 	}
-	err := tui.Run(s.root, s.limit)
-	newState, rawErr := term.MakeRaw(int(os.Stdin.Fd()))
-	if rawErr == nil {
-		*oldState = newState
+	defer func() {
+		newState, rawErr := term.MakeRaw(int(os.Stdin.Fd()))
+		if rawErr == nil {
+			*oldState = newState
+		}
+		s.enterScreen()
+		s.resizePTY()
+		if returnErr == nil && rawErr != nil {
+			returnErr = rawErr
+		}
+	}()
+
+	executable, err := os.Executable()
+	if err != nil {
+		return err
 	}
-	s.enterScreen()
-	s.resizePTY()
-	if rawErr != nil {
-		return rawErr
-	}
-	return err
+	cmd := exec.Command(executable, "browse", "--limit", strconv.Itoa(s.limit), s.root)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func (s *session) watchResize(done <-chan struct{}) {
