@@ -240,7 +240,11 @@ func Run(root string, limit int) error {
 		selected:           map[string]bool{},
 	}
 	m.loadCommitFiles()
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	options := []tea.ProgramOption{}
+	if os.Getenv("AGENTGIT_BROWSE_ALT_SCREEN") != "0" {
+		options = append(options, tea.WithAltScreen())
+	}
+	_, err = tea.NewProgram(m, options...).Run()
 	return err
 }
 
