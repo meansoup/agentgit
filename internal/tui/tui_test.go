@@ -605,6 +605,30 @@ func TestCtrlCQuits(t *testing.T) {
 	}
 }
 
+func TestEmbeddedBrowserEscReturnsToTerminal(t *testing.T) {
+	m := model{mode: modeCommits, embedded: true}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if cmd == nil {
+		t.Fatal("esc in embedded browser did not return a quit command")
+	}
+}
+
+func TestEmbeddedBrowserCtrlCDoesNotQuit(t *testing.T) {
+	m := model{mode: modeCommits, embedded: true}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	got := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("ctrl+c in embedded browser returned a quit command")
+	}
+	if !strings.Contains(got.notice, "Esc") {
+		t.Fatalf("notice = %q, want Esc hint", got.notice)
+	}
+}
+
 func TestStatusBarIncludesPersistentCommands(t *testing.T) {
 	m := model{
 		mode:  modeFiles,

@@ -28,6 +28,7 @@
 
 - **Prefix key**: `Ctrl+G`
 - **Open commit browser**: `Ctrl+G`, then `c`
+- **Return from commit browser to the agent**: `Esc`
 - **Help**: `Ctrl+G`, then `h`
 - **Redraw status**: `Ctrl+G`, then `r`
 - **Send literal Ctrl+G to the agent**: `Ctrl+G`, then `g`

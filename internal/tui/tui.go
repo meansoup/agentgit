@@ -110,6 +110,7 @@ type model struct {
 	searchFiles        []string
 	searchResults      []fileSearchResult
 	gitShortcut        string
+	embedded           bool
 }
 
 const renderedFileCacheLimit = 50
@@ -238,6 +239,7 @@ func Run(root string, limit int) error {
 		fullCache:          map[string][]string{},
 		expanded:           map[string]bool{},
 		selected:           map[string]bool{},
+		embedded:           os.Getenv("AGENTGIT_EMBEDDED_BROWSER") == "1",
 	}
 	m.loadCommitFiles()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -347,6 +349,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.helpOpen = false
 				return m, nil
 			case "ctrl+c":
+				if m.embedded {
+					return m, nil
+				}
 				return m, m.quitCmd()
 			default:
 				return m, nil
@@ -357,6 +362,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c":
+			if m.embedded {
+				m.notice = "press Esc to return to agent terminal"
+				return m, nil
+			}
 			return m, m.quitCmd()
 		case "esc":
 			if m.mode == modeSelect && m.pending != selectActionNone {
@@ -366,6 +375,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.requestDrawer && m.mode != modeRequest {
 				m.requestDrawer = false
 				return m, nil
+			}
+			if m.embedded {
+				return m, m.quitCmd()
 			}
 		case "up":
 			m.clearNotice()
@@ -1741,6 +1753,10 @@ func (m model) commandContextLine() string {
 	if m.searchOpen {
 		return "[Enter] Open  [Esc] Close  [Up/Down] Select  [Backspace] Delete"
 	}
+	returnCommand := ""
+	if m.embedded {
+		returnCommand = "  [Esc] Return"
+	}
 	if m.gitShortcut == "g" {
 		return "[p] Push  [b d] Delete merged branches  [Esc] Cancel"
 	}
@@ -1749,23 +1765,23 @@ func (m model) commandContextLine() string {
 	}
 	switch m.mode {
 	case modeCommits:
-		return "[Ctrl+P] Files  [Ctrl+E] Recent  [Alt+/] Grep  [g p] Push  [g b d] Delete merged  [?] Help"
+		return "[Ctrl+P] Files  [Ctrl+E] Recent  [Alt+/] Grep  [g p] Push  [g b d] Delete merged  [?] Help" + returnCommand
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return "[y] Confirm  [n/Esc] Cancel  [?] Help"
 		}
-		return "[Space] Select  [x] Delete  [m] Merge  [s] Back  [?] Help"
+		return "[Space] Select  [x] Delete  [m] Merge  [s] Back  [?] Help" + returnCommand
 	case modeDiff:
-		return "[w] Wrap  [l] Lines  [f] Full file  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files"
+		return "[w] Wrap  [l] Lines  [f] Full file  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
 	case modeFullFile:
 		if m.worktreeFile {
-			return "[w] Wrap  [l] Lines  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files"
+			return "[w] Wrap  [l] Lines  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
 		}
-		return "[w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files"
+		return "[w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
 	case modeRequest:
-		return "[w] Wrap  [v] Back  [Ctrl+P] Files  [?] Help"
+		return "[w] Wrap  [v] Back  [Ctrl+P] Files  [?] Help" + returnCommand
 	}
-	return "[Ctrl+P] Files  [Alt+/] Grep  [?] Help"
+	return "[Ctrl+P] Files  [Alt+/] Grep  [?] Help" + returnCommand
 }
 
 func onOff(enabled bool) string {
@@ -2000,8 +2016,8 @@ func (m model) helpEntries() []helpEntry {
 		{"ctrl+e", "Recent", "open a recently viewed file"},
 		{"alt+/", "Grep", "search text across repository files"},
 		{"?", "Close help", "return to the current screen"},
-		{"ctrl+c", "Quit", "exit agentgit immediately"},
 	}
+	entries = append(entries, m.exitHelpEntry())
 	switch m.mode {
 	case modeCommits:
 		return append([]helpEntry{
@@ -2012,14 +2028,14 @@ func (m model) helpEntries() []helpEntry {
 			{"v", "Requests", "toggle transcript request drawer"},
 			{"w", "Wrap lines", "show complete commit lines"},
 			{"r", "Refresh", "reload commits and transcripts"},
-			{"ctrl+c", "Quit", "exit agentgit"},
+			m.exitHelpEntry(),
 		}, entries...)
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return append([]helpEntry{
 				{"y", "Confirm", "rewrite the selected latest commits"},
 				{"n/esc", "Cancel", "return to selecting commits"},
-				{"ctrl+c", "Quit", "exit agentgit"},
+				m.exitHelpEntry(),
 			}, entries...)
 		}
 		return append([]helpEntry{
@@ -2029,7 +2045,7 @@ func (m model) helpEntries() []helpEntry {
 			{"m", "Merge", "squash the selected latest commit range"},
 			{"s/left", "Back", "return to commit view"},
 			{"r", "Refresh", "reload commits and transcripts"},
-			{"ctrl+c", "Quit", "exit agentgit"},
+			m.exitHelpEntry(),
 		}, entries...)
 	case modeDirectories:
 		return append([]helpEntry{
@@ -2039,7 +2055,7 @@ func (m model) helpEntries() []helpEntry {
 			{"tab", "Commits", "switch to commit list"},
 			{"v", "Requests", "toggle transcript request drawer"},
 			{"r", "Refresh", "reload commits and transcripts"},
-			{"ctrl+c", "Quit", "exit agentgit"},
+			m.exitHelpEntry(),
 		}, entries...)
 	case modeFiles:
 		if m.selectedFileIsImage() {
@@ -2110,6 +2126,13 @@ func (m model) helpEntries() []helpEntry {
 	default:
 		return entries
 	}
+}
+
+func (m model) exitHelpEntry() helpEntry {
+	if m.embedded {
+		return helpEntry{"esc", "Return", "return to the agent terminal"}
+	}
+	return helpEntry{"ctrl+c", "Quit", "exit agentgit"}
 }
 
 func (m *model) move(delta int) {

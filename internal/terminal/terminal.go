@@ -362,10 +362,12 @@ func (s *session) openCommitView(oldState **term.State) (returnErr error) {
 		return err
 	}
 	cmd := exec.Command(executable, "browse", "--limit", strconv.Itoa(s.limit), s.root)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "AGENTGIT_EMBEDDED_BROWSER=1")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	signal.Ignore(os.Interrupt)
+	defer signal.Reset(os.Interrupt)
 	return cmd.Run()
 }
 
