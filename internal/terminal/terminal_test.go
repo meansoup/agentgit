@@ -15,6 +15,19 @@ func TestCtrlGQuestionMarkASCIIOpensHelp(t *testing.T) {
 	}
 }
 
+func TestCtrlGHOpensHelp(t *testing.T) {
+	s := &session{}
+
+	s.handleInput([]byte{ctrlG, 'h'})
+
+	if !s.help {
+		t.Fatal("help = false, want true")
+	}
+	if s.prefix {
+		t.Fatal("prefix = true, want false")
+	}
+}
+
 func TestCtrlGQuestionMarkCSIUOpensHelp(t *testing.T) {
 	s := &session{}
 

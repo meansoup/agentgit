@@ -194,7 +194,7 @@ func shellPath() string {
 func (s *session) enterScreen(clear bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Fprint(os.Stdout, "\x1b[?1049h\x1b[?25h")
+	fmt.Fprint(os.Stdout, "\x1b[?25h")
 	if clear {
 		fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
 	}
@@ -204,7 +204,7 @@ func (s *session) enterScreen(clear bool) {
 func (s *session) leaveScreen() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Fprint(os.Stdout, "\x1b[r\x1b[?25h\x1b[?1049l")
+	fmt.Fprintf(os.Stdout, "\x1b[r\x1b[%d;1H\x1b[2K\x1b[?25h", max(1, s.height))
 }
 
 func (s *session) copyPTY(done <-chan struct{}) {
@@ -362,7 +362,7 @@ func (s *session) openCommitView(oldState **term.State) (returnErr error) {
 		return err
 	}
 	cmd := exec.Command(executable, "browse", "--limit", strconv.Itoa(s.limit), s.root)
-	cmd.Env = append(os.Environ(), "AGENTGIT_BROWSE_ALT_SCREEN=0")
+	cmd.Env = os.Environ()
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -446,9 +446,9 @@ func (s *session) statusLine() string {
 		cwd = s.root
 	}
 	left := fmt.Sprintf(" agentgit:%s  %s  %s ", mode, emptyFallback(cwd, "."), emptyFallback(command, "agent"))
-	right := " Ctrl-G ? help "
+	right := " Ctrl-G h help "
 	if s.help || s.prefix {
-		right = " Ctrl-G: c commits | q quit | r redraw | g send Ctrl-G | ? help "
+		right = " Ctrl-G: c commits | q quit | r redraw | g send Ctrl-G | h help "
 	}
 	if s.status != "" {
 		right = " " + s.status + " |" + right
