@@ -143,12 +143,12 @@ func Run(config Config) error {
 		case request := <-s.actionCh:
 			switch request.action {
 			case actionCommitView:
+				status := "returned from commits"
 				if err := s.openCommitView(&oldState); err != nil {
-					s.drawStatus("commit view failed: " + err.Error())
-				} else {
-					s.drawStatus("returned from commits")
+					status = "commit view failed: " + err.Error()
 				}
 				s.setPaused(false)
+				s.drawStatus(status)
 			}
 			close(request.done)
 		}
@@ -272,8 +272,8 @@ func (s *session) handleInput(data []byte) {
 }
 
 func (s *session) openCommitViewFromInput() {
-	s.setPaused(true)
 	s.drawStatus("opening commits...")
+	s.setPaused(true)
 	done := make(chan struct{})
 	s.actionCh <- actionRequest{action: actionCommitView, done: done}
 	<-done
@@ -423,7 +423,7 @@ func (s *session) drawStatusLocked(status string) {
 		s.status = status
 		s.statusUntil = time.Now().Add(3 * time.Second)
 	}
-	if s.height <= 0 {
+	if s.paused || s.height <= 0 {
 		return
 	}
 	line := s.statusLine()

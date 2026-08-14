@@ -121,6 +121,31 @@ func TestStatusLineShowsGitState(t *testing.T) {
 	}
 }
 
+func TestDrawStatusDoesNotWriteWhilePaused(t *testing.T) {
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writeEnd
+	defer func() {
+		os.Stdout = oldStdout
+		readEnd.Close()
+	}()
+
+	s := &session{height: 24, width: 80, paused: true}
+	s.drawStatusLocked("hidden")
+	writeEnd.Close()
+
+	data, err := io.ReadAll(readEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("paused draw wrote %q, want no output", data)
+	}
+}
+
 func TestConstrainPTYScrollRegionsKeepsStatusLineReserved(t *testing.T) {
 	s := &session{height: 24}
 
