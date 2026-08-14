@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,20 +30,22 @@ type Config struct {
 }
 
 type session struct {
-	root     string
-	command  []string
-	limit    int
-	ptmx     *os.File
-	process  *os.Process
-	mu       sync.Mutex
-	cond     *sync.Cond
-	width    int
-	height   int
-	paused   bool
-	status   string
-	agentAlt bool
-	ptyTail  []byte
-	actionCh chan actionRequest
+	root        string
+	command     []string
+	limit       int
+	ptmx        *os.File
+	process     *os.Process
+	mu          sync.Mutex
+	cond        *sync.Cond
+	width       int
+	height      int
+	paused      bool
+	status      string
+	statusUntil time.Time
+	gitState    gitStatusState
+	agentAlt    bool
+	ptyTail     []byte
+	actionCh    chan actionRequest
 }
 
 type action int
@@ -91,6 +92,7 @@ func Run(config Config) error {
 		limit:    defaultLimit(config.Limit),
 		width:    width,
 		height:   height,
+		gitState: loadGitStatus(root),
 		actionCh: make(chan actionRequest),
 	}
 	s.cond = sync.NewCond(&s.mu)
@@ -111,7 +113,7 @@ func Run(config Config) error {
 	s.ptmx = ptmx
 	s.process = cmd.Process
 
-	s.drawStatus("ready")
+	s.drawStatus("")
 
 	waitCh := make(chan error, 1)
 	go func() {
@@ -123,6 +125,7 @@ func Run(config Config) error {
 	go s.copyPTY(done)
 	go s.copyInput(done)
 	go s.watchResize(done)
+	go s.watchGitStatus(done)
 
 	for {
 		select {
@@ -360,6 +363,28 @@ func (s *session) resize() {
 	s.resizePTY()
 }
 
+func (s *session) watchGitStatus(done <-chan struct{}) {
+	s.refreshGitStatus()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			s.refreshGitStatus()
+		}
+	}
+}
+
+func (s *session) refreshGitStatus() {
+	state := loadGitStatus(s.root)
+	s.mu.Lock()
+	s.gitState = state
+	s.drawStatusLocked("")
+	s.mu.Unlock()
+}
+
 func (s *session) resizePTY() {
 	if s.ptmx == nil {
 		return
@@ -383,6 +408,7 @@ func (s *session) drawStatus(status string) {
 func (s *session) drawStatusLocked(status string) {
 	if status != "" {
 		s.status = status
+		s.statusUntil = time.Now().Add(3 * time.Second)
 	}
 	if s.height <= 0 {
 		return
@@ -400,15 +426,9 @@ func (s *session) setScrollRegionLocked() {
 }
 
 func (s *session) statusLine() string {
-	mode := "terminal"
-	command := strings.Join(s.command, " ")
-	cwd := filepath.Base(s.root)
-	if cwd == "." || cwd == string(filepath.Separator) {
-		cwd = s.root
-	}
-	left := fmt.Sprintf(" agentgit:%s  %s  %s ", mode, emptyFallback(cwd, "."), emptyFallback(command, "agent"))
-	right := " Ctrl-G commits | Esc returns "
-	if s.status != "" {
+	left := " agentgit "
+	right := " " + s.gitState.String() + " | Ctrl-G commits "
+	if s.status != "" && time.Now().Before(s.statusUntil) {
 		right = " " + s.status + " |" + right
 	}
 	return reverse(padStatus(left, right, s.width))

@@ -26,6 +26,7 @@
 
 `agentgit`은 현재 저장소에서 shell 또는 지정한 명령을 PTY로 실행합니다. command terminal은 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 커밋 브라우저 진입 표시용으로 유지합니다.
 
+- **Status line**: 현재 branch, 서버와의 커밋 격차(`↑` ahead / `↓` behind), 미커밋 파일/라인 수(`+` 추가 / `-` 삭제)
 - **커밋 브라우저 열기**: `Ctrl+G`
 - **커밋 브라우저에서 에이전트로 복귀**: `Esc`
 

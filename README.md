@@ -26,6 +26,7 @@
 
 `agentgit` starts your shell, or a configured command, in the current repository through a PTY. The command terminal gets the full terminal minus the bottom status line, and `agentgit` owns that last line for opening the commit browser.
 
+- **Status line**: current branch, server gap (`↑` ahead / `↓` behind), and uncommitted file/line counts (`+` additions / `-` deletions)
 - **Open commit browser**: `Ctrl+G`
 - **Return from commit browser to the agent**: `Esc`
 
