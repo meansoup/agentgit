@@ -101,7 +101,7 @@ func Run(config Config) error {
 
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = root
-	cmd.Env = os.Environ()
+	cmd.Env = terminalEnv(os.Environ(), width, height)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Rows: uint16(max(1, height-1)),
 		Cols: uint16(max(1, width)),
@@ -170,6 +170,19 @@ func runPlain(config Config) error {
 	return cmd.Run()
 }
 
+func terminalEnv(env []string, width int, height int) []string {
+	out := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "LINES=") || strings.HasPrefix(entry, "COLUMNS=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	out = append(out, fmt.Sprintf("LINES=%d", max(1, height-1)))
+	out = append(out, fmt.Sprintf("COLUMNS=%d", max(1, width)))
+	return out
+}
+
 func resolveCommand(command []string) ([]string, error) {
 	if len(command) > 0 {
 		return command, nil
@@ -216,7 +229,7 @@ func (s *session) copyPTY(done <-chan struct{}) {
 			}
 			s.mu.Lock()
 			s.observePTYOutputLocked(buf[:n])
-			_, _ = os.Stdout.Write(buf[:n])
+			_, _ = os.Stdout.Write(s.constrainPTYScrollRegionsLocked(buf[:n]))
 			s.drawStatusLocked("")
 			s.mu.Unlock()
 		}
@@ -423,6 +436,47 @@ func (s *session) setScrollRegionLocked() {
 	if s.height > 1 {
 		fmt.Fprintf(os.Stdout, "\x1b[1;%dr", s.height-1)
 	}
+}
+
+func (s *session) constrainPTYScrollRegionsLocked(data []byte) []byte {
+	if s.height <= 1 || !bytes.Contains(data, []byte("\x1b[")) {
+		return data
+	}
+	var out []byte
+	for len(data) > 0 {
+		index := bytes.Index(data, []byte("\x1b["))
+		if index < 0 {
+			out = append(out, data...)
+			break
+		}
+		out = append(out, data[:index]...)
+		data = data[index:]
+		end := csiEnd(data)
+		if end < 0 {
+			out = append(out, data...)
+			break
+		}
+		sequence := data[:end+1]
+		if sequence[len(sequence)-1] == 'r' {
+			out = append(out, []byte(fmt.Sprintf("\x1b[1;%dr", s.height-1))...)
+		} else {
+			out = append(out, sequence...)
+		}
+		data = data[end+1:]
+	}
+	return out
+}
+
+func csiEnd(data []byte) int {
+	if len(data) < 3 || data[0] != 0x1b || data[1] != '[' {
+		return -1
+	}
+	for i := 2; i < len(data); i++ {
+		if data[i] >= 0x40 && data[i] <= 0x7e {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *session) statusLine() string {

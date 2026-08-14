@@ -55,6 +55,20 @@ func TestResolveCommandUsesConfiguredAgent(t *testing.T) {
 	}
 }
 
+func TestTerminalEnvReservesStatusLine(t *testing.T) {
+	env := terminalEnv([]string{"PATH=/bin", "LINES=99", "COLUMNS=99"}, 80, 24)
+	joined := strings.Join(env, "\n")
+
+	for _, want := range []string{"PATH=/bin", "LINES=23", "COLUMNS=80"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("env missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "LINES=99") || strings.Contains(joined, "COLUMNS=99") {
+		t.Fatalf("env retained stale terminal size:\n%s", joined)
+	}
+}
+
 func TestCtrlGDoesNotForwardToAgent(t *testing.T) {
 	readEnd, writeEnd, err := os.Pipe()
 	if err != nil {
@@ -104,6 +118,26 @@ func TestStatusLineShowsGitState(t *testing.T) {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status missing %q: %q", want, status)
 		}
+	}
+}
+
+func TestConstrainPTYScrollRegionsKeepsStatusLineReserved(t *testing.T) {
+	s := &session{height: 24}
+
+	got := string(s.constrainPTYScrollRegionsLocked([]byte("a\x1b[rb\x1b[1;24rc")))
+
+	if got != "a\x1b[1;23rb\x1b[1;23rc" {
+		t.Fatalf("constrained output = %q", got)
+	}
+}
+
+func TestConstrainPTYScrollRegionsLeavesOtherCSISequences(t *testing.T) {
+	s := &session{height: 24}
+
+	got := string(s.constrainPTYScrollRegionsLocked([]byte("\x1b[2J\x1b[H")))
+
+	if got != "\x1b[2J\x1b[H" {
+		t.Fatalf("constrained output = %q", got)
 	}
 }
 
