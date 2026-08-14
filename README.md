@@ -24,16 +24,10 @@
 
 ## Terminal Wrapper
 
-`agentgit` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for prefix commands.
+`agentgit` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for opening the commit browser.
 
-- **Command mode**: `Ctrl+G`
-- **Open commit browser**: `Ctrl+G`, then `c`
+- **Open commit browser**: `Ctrl+G`
 - **Return from commit browser to the agent**: `Esc`
-- **Help**: `Ctrl+G`, then `h`
-- **Redraw status**: `Ctrl+G`, then `r`
-- **Send literal Ctrl+G to the agent**: `Ctrl+G`, then `g`
-- **Quit wrapper and terminate the agent process**: `Ctrl+G`, then `q`
-- **Cancel command mode**: `Esc`
 
 If no command is provided, `agentgit` uses `AGENTGIT_AGENT` when set, otherwise it tries `codex`, `claude`, then `gemini`.
 

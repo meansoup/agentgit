@@ -1,78 +1,94 @@
 package terminal
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
 
-func TestCtrlGHOpensHelp(t *testing.T) {
-	s := &session{}
-
-	s.handleInput([]byte{ctrlG, 'h'})
-
-	if !s.help {
-		t.Fatal("help = false, want true")
-	}
-	if s.prefix {
-		t.Fatal("prefix = true, want false")
-	}
-	if s.status != "help" {
-		t.Fatalf("status = %q, want help", s.status)
-	}
-}
-
-func TestCtrlGQuestionMarkStillOpensHelpWhenSentAsASCII(t *testing.T) {
-	s := &session{}
-
-	s.handleInput([]byte{ctrlG, '?'})
-
-	if !s.help {
-		t.Fatal("help = false, want true")
-	}
-	if s.prefix {
-		t.Fatal("prefix = true, want false")
-	}
-}
-
-func TestCtrlGEscCancelsPrefix(t *testing.T) {
-	s := &session{}
-
-	s.handleInput([]byte{ctrlG, esc})
-
-	if s.prefix {
-		t.Fatal("prefix = true, want false")
-	}
-	if s.status != "prefix canceled" {
-		t.Fatalf("status = %q, want prefix canceled", s.status)
-	}
-}
-
-func TestPrefixStatusShowsCommandMode(t *testing.T) {
-	s := &session{width: 160}
+func TestCtrlGOpensCommitView(t *testing.T) {
+	s := &session{actionCh: make(chan actionRequest)}
+	opened := make(chan struct{})
+	go func() {
+		request := <-s.actionCh
+		if request.action != actionCommitView {
+			t.Errorf("action = %v, want actionCommitView", request.action)
+		}
+		close(request.done)
+		close(opened)
+	}()
 
 	s.handleInput([]byte{ctrlG})
-	status := s.statusLine()
 
-	for _, want := range []string{"agentgit:prefix", "c commits", "h help", "Esc cancel"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status missing %q: %q", want, status)
-		}
+	<-opened
+	if s.status != "opening commits..." {
+		t.Fatalf("status = %q, want opening commits...", s.status)
 	}
 }
 
-func TestStatusLinePrioritizesCommands(t *testing.T) {
+func TestCtrlGDoesNotForwardToAgent(t *testing.T) {
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readEnd.Close()
 	s := &session{
-		width:   80,
-		root:    "/repo",
-		command: []string{"a-very-long-agent-command", "with", "many", "arguments"},
+		ptmx:     writeEnd,
+		actionCh: make(chan actionRequest),
 	}
+	go func() {
+		request := <-s.actionCh
+		close(request.done)
+	}()
 
+	s.handleInput([]byte("a"))
 	s.handleInput([]byte{ctrlG})
+	s.handleInput([]byte("b"))
+	writeEnd.Close()
+
+	data, err := io.ReadAll(readEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "ab" {
+		t.Fatalf("agent input = %q, want ab", got)
+	}
+}
+
+func TestStatusLineShowsCtrlGCommitShortcut(t *testing.T) {
+	s := &session{width: 100}
+
 	status := s.statusLine()
 
-	for _, want := range []string{"c commits", "h help", "q quit", "Esc cancel"} {
+	for _, want := range []string{"agentgit:terminal", "Ctrl-G commits", "Esc returns"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status missing %q: %q", want, status)
 		}
+	}
+}
+
+func TestObservePTYOutputTracksAltScreen(t *testing.T) {
+	s := &session{}
+
+	s.observePTYOutputLocked([]byte("before\x1b[?1049hafter"))
+	if !s.agentAlt {
+		t.Fatal("agentAlt = false, want true")
+	}
+
+	s.observePTYOutputLocked([]byte("\x1b[?1049l"))
+	if s.agentAlt {
+		t.Fatal("agentAlt = true, want false")
+	}
+}
+
+func TestObservePTYOutputTracksSplitAltScreenSequence(t *testing.T) {
+	s := &session{}
+
+	s.observePTYOutputLocked([]byte("before\x1b[?10"))
+	s.observePTYOutputLocked([]byte("49hafter"))
+
+	if !s.agentAlt {
+		t.Fatal("agentAlt = false, want true")
 	}
 }

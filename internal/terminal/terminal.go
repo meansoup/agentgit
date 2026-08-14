@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -19,9 +20,8 @@ import (
 )
 
 const (
-	ctrlC = byte(0x03)
 	ctrlG = byte(0x07)
-	esc   = byte(0x1b)
+	ctrlL = byte(0x0c)
 )
 
 type Config struct {
@@ -40,10 +40,10 @@ type session struct {
 	cond     *sync.Cond
 	width    int
 	height   int
-	prefix   bool
-	help     bool
 	paused   bool
 	status   string
+	agentAlt bool
+	ptyTail  []byte
 	actionCh chan actionRequest
 }
 
@@ -217,6 +217,7 @@ func (s *session) copyPTY(done <-chan struct{}) {
 				return
 			}
 			s.mu.Lock()
+			s.observePTYOutputLocked(buf[:n])
 			_, _ = os.Stdout.Write(buf[:n])
 			s.drawStatusLocked("")
 			s.mu.Unlock()
@@ -246,20 +247,11 @@ func (s *session) copyInput(done <-chan struct{}) {
 func (s *session) handleInput(data []byte) {
 	start := 0
 	for i, b := range data {
-		if s.prefixActive() {
-			if start < i {
-				_, _ = s.ptmx.Write(data[start:i])
-			}
-			s.handlePrefixKey(b)
-			start = i + 1
-			continue
-		}
 		if b == ctrlG {
 			if start < i {
 				_, _ = s.ptmx.Write(data[start:i])
 			}
-			s.setPrefix(true)
-			s.drawStatus("prefix")
+			s.openCommitViewFromInput()
 			start = i + 1
 		}
 	}
@@ -268,36 +260,12 @@ func (s *session) handleInput(data []byte) {
 	}
 }
 
-func (s *session) handlePrefixKey(key byte) {
-	s.setPrefix(false)
-	switch key {
-	case '?', 'h':
-		if s.toggleHelp() {
-			s.drawStatus("help")
-		} else {
-			s.drawStatus("help hidden")
-		}
-	case 'c':
-		s.setPaused(true)
-		s.drawStatus("opening commits...")
-		done := make(chan struct{})
-		s.actionCh <- actionRequest{action: actionCommitView, done: done}
-		<-done
-	case 'r':
-		s.drawStatus("redrawn")
-	case 'g', ctrlG:
-		_, _ = s.ptmx.Write([]byte{ctrlG})
-		s.drawStatus("sent Ctrl-G")
-	case 'q':
-		s.drawStatus("terminating...")
-		go s.terminateProcess()
-	case ctrlC:
-		s.drawStatus("prefix canceled")
-	case esc:
-		s.drawStatus("prefix canceled")
-	default:
-		s.drawStatus(fmt.Sprintf("unknown prefix key %s", printableKey(key)))
-	}
+func (s *session) openCommitViewFromInput() {
+	s.setPaused(true)
+	s.drawStatus("opening commits...")
+	done := make(chan struct{})
+	s.actionCh <- actionRequest{action: actionCommitView, done: done}
+	<-done
 }
 
 func (s *session) terminateProcess() {
@@ -324,6 +292,7 @@ func (s *session) signalAgent(signal syscall.Signal) error {
 }
 
 func (s *session) openCommitView(oldState **term.State) (returnErr error) {
+	agentAlt := s.agentAltScreen()
 	s.leaveScreen()
 	if *oldState != nil {
 		_ = term.Restore(int(os.Stdin.Fd()), *oldState)
@@ -335,6 +304,7 @@ func (s *session) openCommitView(oldState **term.State) (returnErr error) {
 		}
 		s.enterScreen(false)
 		s.resizePTY()
+		s.resumeAgentDisplay(agentAlt)
 		if returnErr == nil && rawErr != nil {
 			returnErr = rawErr
 		}
@@ -352,6 +322,20 @@ func (s *session) openCommitView(oldState **term.State) (returnErr error) {
 	signal.Ignore(os.Interrupt)
 	defer signal.Reset(os.Interrupt)
 	return cmd.Run()
+}
+
+func (s *session) resumeAgentDisplay(agentAlt bool) {
+	if !agentAlt {
+		return
+	}
+	s.mu.Lock()
+	fmt.Fprint(os.Stdout, "\x1b[?1049h\x1b[?25h")
+	s.setScrollRegionLocked()
+	s.mu.Unlock()
+	_ = s.signalAgent(syscall.SIGWINCH)
+	if s.ptmx != nil {
+		_, _ = s.ptmx.Write([]byte{ctrlL})
+	}
 }
 
 func (s *session) watchResize(done <-chan struct{}) {
@@ -422,19 +406,13 @@ func (s *session) setScrollRegionLocked() {
 
 func (s *session) statusLine() string {
 	mode := "terminal"
-	if s.prefix {
-		mode = "prefix"
-	}
 	command := strings.Join(s.command, " ")
 	cwd := filepath.Base(s.root)
 	if cwd == "." || cwd == string(filepath.Separator) {
 		cwd = s.root
 	}
 	left := fmt.Sprintf(" agentgit:%s  %s  %s ", mode, emptyFallback(cwd, "."), emptyFallback(command, "agent"))
-	right := " Ctrl-G h help "
-	if s.help || s.prefix {
-		right = " c commits  h help  r redraw  g send ^G  q quit  Esc cancel "
-	}
+	right := " Ctrl-G commits | Esc returns "
 	if s.status != "" {
 		right = " " + s.status + " |" + right
 	}
@@ -491,6 +469,47 @@ func printableKey(key byte) string {
 	return fmt.Sprintf("0x%02x", key)
 }
 
+func (s *session) observePTYOutputLocked(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	combined := make([]byte, 0, len(s.ptyTail)+len(data))
+	combined = append(combined, s.ptyTail...)
+	combined = append(combined, data...)
+	for {
+		index := bytes.Index(combined, []byte("\x1b[?"))
+		if index < 0 {
+			break
+		}
+		combined = combined[index+3:]
+		end := bytes.IndexAny(combined, "hl")
+		if end < 0 {
+			break
+		}
+		mode := string(combined[:end])
+		final := combined[end]
+		if mode == "47" || mode == "1047" || mode == "1049" {
+			s.agentAlt = final == 'h'
+		}
+		combined = combined[end+1:]
+	}
+	if len(data) > 32 {
+		s.ptyTail = append(s.ptyTail[:0], data[len(data)-32:]...)
+		return
+	}
+	tail := append(append([]byte(nil), s.ptyTail...), data...)
+	if len(tail) > 32 {
+		tail = tail[len(tail)-32:]
+	}
+	s.ptyTail = tail
+}
+
+func (s *session) agentAltScreen() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentAlt
+}
+
 func emptyFallback(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -514,18 +533,6 @@ func defaultLimit(limit int) int {
 		return limit
 	}
 	return 500
-}
-
-func (s *session) prefixActive() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.prefix
-}
-
-func (s *session) setPrefix(active bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.prefix = active
 }
 
 func (s *session) waitIfPaused(done <-chan struct{}) bool {
@@ -554,11 +561,4 @@ func (s *session) setPaused(paused bool) {
 	if !paused {
 		s.cond.Broadcast()
 	}
-}
-
-func (s *session) toggleHelp() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.help = !s.help
-	return s.help
 }
