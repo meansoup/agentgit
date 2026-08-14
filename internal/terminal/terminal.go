@@ -174,12 +174,7 @@ func resolveCommand(command []string) ([]string, error) {
 	if configured := strings.TrimSpace(os.Getenv("AGENTGIT_AGENT")); configured != "" {
 		return []string{shellPath(), "-lc", configured}, nil
 	}
-	for _, candidate := range []string{"codex", "claude", "gemini"} {
-		if _, err := exec.LookPath(candidate); err == nil {
-			return []string{candidate}, nil
-		}
-	}
-	return nil, errors.New("no agent command provided and no codex, claude, or gemini executable was found in PATH")
+	return []string{shellPath()}, nil
 }
 
 func shellPath() string {

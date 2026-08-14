@@ -1,13 +1,13 @@
 # agentgit
 
-**agentgit** is a Git-aware AI-agent workspace. It can browse Git history plus local agent transcripts, and it can run an agent CLI inside a tmux-like terminal wrapper with a persistent one-line command bar.
+**agentgit** is a Git-aware command workspace. It opens a project terminal with a persistent one-line command bar, and it can jump into Git history plus local agent transcript browsing.
 
 [한국어 문서 (README_ko.md)](./README_ko.md)
 
 ## Quick Start
 
 1. **Install**: Place the `agentgit` binary in your `PATH`.
-2. **Use**: Run `agentgit` in a repository to start your agent CLI inside the tmux-like wrapper:
+2. **Use**: Run `agentgit` in a repository to start a shell inside the tmux-like wrapper:
    ```sh
    agentgit
    ```
@@ -16,7 +16,7 @@
 
 | Command | Description |
 | :--- | :--- |
-| `agentgit` | Run the first available agent CLI from `codex`, `claude`, or `gemini` inside the wrapper. |
+| `agentgit` | Run your default shell inside the wrapper. |
 | `agentgit -- codex` | Run a specific command inside the wrapper. |
 | `agentgit browse` | Open the history browser for the current directory. |
 | `agentgit browse [path]` | Browse history for a specific repo, folder, or file. |
@@ -24,12 +24,12 @@
 
 ## Terminal Wrapper
 
-`agentgit` starts an agent CLI in the current repository through a PTY. The agent gets the full terminal minus the bottom status line, and `agentgit` owns that last line for opening the commit browser.
+`agentgit` starts your shell, or a configured command, in the current repository through a PTY. The command terminal gets the full terminal minus the bottom status line, and `agentgit` owns that last line for opening the commit browser.
 
 - **Open commit browser**: `Ctrl+G`
 - **Return from commit browser to the agent**: `Esc`
 
-If no command is provided, `agentgit` uses `AGENTGIT_AGENT` when set, otherwise it tries `codex`, `claude`, then `gemini`.
+If no command is provided, `agentgit` uses `AGENTGIT_AGENT` when set, otherwise it opens `$SHELL`. Pass a command after `--` to start something specific, such as `agentgit -- claude`.
 
 ## TUI Navigation
 

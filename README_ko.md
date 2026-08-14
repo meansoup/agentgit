@@ -1,13 +1,13 @@
 # agentgit
 
-**agentgit**은 Git을 이해하는 AI 에이전트 작업 공간입니다. Git 히스토리와 로컬 에이전트 트랜스크립트를 탐색할 수 있고, tmux처럼 하단 한 줄 command bar를 유지하는 터미널 래퍼 안에서 에이전트 CLI를 실행할 수 있습니다.
+**agentgit**은 Git을 이해하는 command 작업 공간입니다. 하단 한 줄 command bar가 있는 프로젝트 터미널을 열고, 필요할 때 Git 히스토리와 로컬 에이전트 트랜스크립트를 탐색할 수 있습니다.
 
 [English Docs (README.md)](./README.md)
 
 ## 빠른 시작
 
 1. **설치**: `agentgit` 바이너리를 `PATH` 경로에 추가합니다.
-2. **사용**: 저장소에서 `agentgit`을 실행하면 tmux 같은 래퍼 안에서 에이전트 CLI가 시작됩니다.
+2. **사용**: 저장소에서 `agentgit`을 실행하면 tmux 같은 래퍼 안에서 기본 shell이 시작됩니다.
    ```sh
    agentgit
    ```
@@ -16,7 +16,7 @@
 
 | 명령어 | 설명 |
 | :--- | :--- |
-| `agentgit` | `codex`, `claude`, `gemini` 중 먼저 발견되는 에이전트 CLI를 래퍼 안에서 실행합니다. |
+| `agentgit` | 기본 shell을 래퍼 안에서 실행합니다. |
 | `agentgit -- codex` | 특정 명령을 래퍼 안에서 실행합니다. |
 | `agentgit browse` | 현재 디렉토리의 히스토리 브라우저를 엽니다. |
 | `agentgit browse [path]` | 특정 저장소, 폴더 또는 파일의 히스토리를 확인합니다. |
@@ -24,12 +24,12 @@
 
 ## 터미널 래퍼
 
-`agentgit`은 현재 저장소에서 에이전트 CLI를 PTY로 실행합니다. 에이전트는 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 커밋 브라우저 진입 표시용으로 유지합니다.
+`agentgit`은 현재 저장소에서 shell 또는 지정한 명령을 PTY로 실행합니다. command terminal은 하단 status line 한 줄을 제외한 터미널 전체를 사용하고, 마지막 줄은 `agentgit`이 커밋 브라우저 진입 표시용으로 유지합니다.
 
 - **커밋 브라우저 열기**: `Ctrl+G`
 - **커밋 브라우저에서 에이전트로 복귀**: `Esc`
 
-명령을 지정하지 않으면 `AGENTGIT_AGENT` 환경 변수를 먼저 사용하고, 없으면 `codex`, `claude`, `gemini` 순서로 찾습니다.
+명령을 지정하지 않으면 `AGENTGIT_AGENT` 환경 변수를 먼저 사용하고, 없으면 `$SHELL`을 엽니다. 특정 명령으로 시작하려면 `agentgit -- claude`처럼 `--` 뒤에 명령을 넘기면 됩니다.
 
 ## TUI 조작법
 
