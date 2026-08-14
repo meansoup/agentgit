@@ -1,19 +1,9 @@
 package terminal
 
-import "testing"
-
-func TestCtrlGQuestionMarkASCIIOpensHelp(t *testing.T) {
-	s := &session{}
-
-	s.handleInput([]byte{ctrlG, '?'})
-
-	if !s.help {
-		t.Fatal("help = false, want true")
-	}
-	if s.prefix {
-		t.Fatal("prefix = true, want false")
-	}
-}
+import (
+	"strings"
+	"testing"
+)
 
 func TestCtrlGHOpensHelp(t *testing.T) {
 	s := &session{}
@@ -26,12 +16,15 @@ func TestCtrlGHOpensHelp(t *testing.T) {
 	if s.prefix {
 		t.Fatal("prefix = true, want false")
 	}
+	if s.status != "help" {
+		t.Fatalf("status = %q, want help", s.status)
+	}
 }
 
-func TestCtrlGQuestionMarkCSIUOpensHelp(t *testing.T) {
+func TestCtrlGQuestionMarkStillOpensHelpWhenSentAsASCII(t *testing.T) {
 	s := &session{}
 
-	s.handleInput([]byte{ctrlG, esc, '[', '4', '7', ';', '2', 'u'})
+	s.handleInput([]byte{ctrlG, '?'})
 
 	if !s.help {
 		t.Fatal("help = false, want true")
@@ -41,21 +34,45 @@ func TestCtrlGQuestionMarkCSIUOpensHelp(t *testing.T) {
 	}
 }
 
-func TestCtrlGQuestionMarkModifyOtherKeysOpensHelp(t *testing.T) {
+func TestCtrlGEscCancelsPrefix(t *testing.T) {
 	s := &session{}
 
-	s.handleInput([]byte{ctrlG, esc, '[', '2', '7', ';', '2', ';', '4', '7', '~'})
+	s.handleInput([]byte{ctrlG, esc})
 
-	if !s.help {
-		t.Fatal("help = false, want true")
-	}
 	if s.prefix {
 		t.Fatal("prefix = true, want false")
 	}
+	if s.status != "prefix canceled" {
+		t.Fatalf("status = %q, want prefix canceled", s.status)
+	}
 }
 
-func TestDecodePrefixSequenceWaitsForIncompleteCSI(t *testing.T) {
-	if _, _, complete := decodePrefixSequence([]byte{esc, '[', '4', '7', ';', '2'}); complete {
-		t.Fatal("incomplete CSI sequence was marked complete")
+func TestPrefixStatusShowsCommandMode(t *testing.T) {
+	s := &session{width: 160}
+
+	s.handleInput([]byte{ctrlG})
+	status := s.statusLine()
+
+	for _, want := range []string{"agentgit:prefix", "c commits", "h help", "Esc cancel"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
+	}
+}
+
+func TestStatusLinePrioritizesCommands(t *testing.T) {
+	s := &session{
+		width:   80,
+		root:    "/repo",
+		command: []string{"a-very-long-agent-command", "with", "many", "arguments"},
+	}
+
+	s.handleInput([]byte{ctrlG})
+	status := s.statusLine()
+
+	for _, want := range []string{"c commits", "h help", "q quit", "Esc cancel"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
 	}
 }

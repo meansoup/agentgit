@@ -1,7 +1,6 @@
 package terminal
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -32,21 +31,20 @@ type Config struct {
 }
 
 type session struct {
-	root      string
-	command   []string
-	limit     int
-	ptmx      *os.File
-	process   *os.Process
-	mu        sync.Mutex
-	cond      *sync.Cond
-	width     int
-	height    int
-	prefix    bool
-	help      bool
-	paused    bool
-	status    string
-	prefixSeq []byte
-	actionCh  chan actionRequest
+	root     string
+	command  []string
+	limit    int
+	ptmx     *os.File
+	process  *os.Process
+	mu       sync.Mutex
+	cond     *sync.Cond
+	width    int
+	height   int
+	prefix   bool
+	help     bool
+	paused   bool
+	status   string
+	actionCh chan actionRequest
 }
 
 type action int
@@ -271,31 +269,14 @@ func (s *session) handleInput(data []byte) {
 }
 
 func (s *session) handlePrefixKey(key byte) {
-	if key == esc {
-		s.prefixSeq = append(s.prefixSeq[:0], key)
-		return
-	}
-	if len(s.prefixSeq) > 0 {
-		s.prefixSeq = append(s.prefixSeq, key)
-		decoded, ok, complete := decodePrefixSequence(s.prefixSeq)
-		if !complete {
-			return
-		}
-		sequence := append([]byte(nil), s.prefixSeq...)
-		s.prefixSeq = nil
-		if ok {
-			s.handlePrefixKey(decoded)
-			return
-		}
-		s.setPrefix(false)
-		s.drawStatus(fmt.Sprintf("unknown prefix key %s", printableSequence(sequence)))
-		return
-	}
 	s.setPrefix(false)
 	switch key {
 	case '?', 'h':
-		s.toggleHelp()
-		s.drawStatus("")
+		if s.toggleHelp() {
+			s.drawStatus("help")
+		} else {
+			s.drawStatus("help hidden")
+		}
 	case 'c':
 		s.setPaused(true)
 		s.drawStatus("opening commits...")
@@ -311,6 +292,8 @@ func (s *session) handlePrefixKey(key byte) {
 		s.drawStatus("terminating...")
 		go s.terminateProcess()
 	case ctrlC:
+		s.drawStatus("prefix canceled")
+	case esc:
 		s.drawStatus("prefix canceled")
 	default:
 		s.drawStatus(fmt.Sprintf("unknown prefix key %s", printableKey(key)))
@@ -450,7 +433,7 @@ func (s *session) statusLine() string {
 	left := fmt.Sprintf(" agentgit:%s  %s  %s ", mode, emptyFallback(cwd, "."), emptyFallback(command, "agent"))
 	right := " Ctrl-G h help "
 	if s.help || s.prefix {
-		right = " Ctrl-G: c commits | q quit | r redraw | g send Ctrl-G | h help "
+		right = " c commits  h help  r redraw  g send ^G  q quit  Esc cancel "
 	}
 	if s.status != "" {
 		right = " " + s.status + " |" + right
@@ -462,14 +445,14 @@ func padStatus(left, right string, width int) string {
 	if width <= 0 {
 		return left + right
 	}
-	left = truncateRunes(left, width)
+	rightWidth := runeWidth(right)
+	if rightWidth >= width {
+		return truncateRunes(right, width)
+	}
+	left = truncateRunes(left, max(0, width-rightWidth-1))
 	space := width - runeWidth(left) - runeWidth(right)
 	if space < 1 {
-		right = truncateRunes(right, max(0, width-runeWidth(left)-1))
-		space = width - runeWidth(left) - runeWidth(right)
-	}
-	if space < 0 {
-		space = 0
+		space = 1
 	}
 	return left + strings.Repeat(" ", space) + right
 }
@@ -508,119 +491,6 @@ func printableKey(key byte) string {
 	return fmt.Sprintf("0x%02x", key)
 }
 
-func printableSequence(sequence []byte) string {
-	if len(sequence) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(sequence))
-	for _, key := range sequence {
-		parts = append(parts, printableKey(key))
-	}
-	return strings.Join(parts, " ")
-}
-
-func decodePrefixSequence(sequence []byte) (byte, bool, bool) {
-	if len(sequence) == 0 || sequence[0] != esc {
-		return 0, false, true
-	}
-	if len(sequence) == 1 {
-		return 0, false, false
-	}
-	if sequence[1] != '[' {
-		if sequence[1] == 'O' && len(sequence) < 3 {
-			return 0, false, false
-		}
-		return 0, false, true
-	}
-	if len(sequence) == 2 {
-		return 0, false, false
-	}
-	final := sequence[len(sequence)-1]
-	if final < 0x40 || final > 0x7e {
-		return 0, false, false
-	}
-	if final == 'u' {
-		if key, ok := decodeCSIU(sequence[2 : len(sequence)-1]); ok {
-			return key, true, true
-		}
-	}
-	if final == '~' {
-		if key, ok := decodeModifyOtherKeys(sequence[2 : len(sequence)-1]); ok {
-			return key, true, true
-		}
-	}
-	return 0, false, true
-}
-
-func decodeCSIU(body []byte) (byte, bool) {
-	fields := splitCSIFields(body)
-	if len(fields) == 0 {
-		return 0, false
-	}
-	code, ok := atoiBytes(fields[0])
-	if !ok {
-		return 0, false
-	}
-	modifier := 1
-	if len(fields) > 1 {
-		if parsed, ok := atoiBytes(fields[1]); ok {
-			modifier = parsed
-		}
-	}
-	return decodedQuestionMark(code, modifier)
-}
-
-func decodeModifyOtherKeys(body []byte) (byte, bool) {
-	fields := splitCSIFields(body)
-	if len(fields) < 3 {
-		return 0, false
-	}
-	prefix, ok := atoiBytes(fields[0])
-	if !ok || prefix != 27 {
-		return 0, false
-	}
-	modifier, ok := atoiBytes(fields[1])
-	if !ok {
-		return 0, false
-	}
-	code, ok := atoiBytes(fields[2])
-	if !ok {
-		return 0, false
-	}
-	return decodedQuestionMark(code, modifier)
-}
-
-func decodedQuestionMark(code int, modifier int) (byte, bool) {
-	if code == int('?') || code == int('/') && hasShiftModifier(modifier) {
-		return '?', true
-	}
-	return 0, false
-}
-
-func hasShiftModifier(modifier int) bool {
-	return modifier > 1 && (modifier-1)&1 != 0
-}
-
-func splitCSIFields(body []byte) [][]byte {
-	return bytes.FieldsFunc(body, func(r rune) bool {
-		return r == ';' || r == ':'
-	})
-}
-
-func atoiBytes(value []byte) (int, bool) {
-	if len(value) == 0 {
-		return 0, false
-	}
-	out := 0
-	for _, b := range value {
-		if b < '0' || b > '9' {
-			return 0, false
-		}
-		out = out*10 + int(b-'0')
-	}
-	return out, true
-}
-
 func emptyFallback(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -656,9 +526,6 @@ func (s *session) setPrefix(active bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prefix = active
-	if !active {
-		s.prefixSeq = nil
-	}
 }
 
 func (s *session) waitIfPaused(done <-chan struct{}) bool {
@@ -689,8 +556,9 @@ func (s *session) setPaused(paused bool) {
 	}
 }
 
-func (s *session) toggleHelp() {
+func (s *session) toggleHelp() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.help = !s.help
+	return s.help
 }
