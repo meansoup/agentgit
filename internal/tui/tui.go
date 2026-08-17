@@ -4023,6 +4023,7 @@ func hardwrapLines(lines []string, width int) []string {
 }
 
 func hardwrapLine(line string, width int) []string {
+	line = expandDisplayTabs(line)
 	if width <= 0 || ansi.StringWidth(line) <= width {
 		return []string{line}
 	}
@@ -4089,6 +4090,7 @@ func splitViewLines(content string) []string {
 }
 
 func padPlain(s string, width int) string {
+	s = expandDisplayTabs(s)
 	visibleWidth := lipgloss.Width(s)
 	if visibleWidth >= width {
 		return s
@@ -4097,6 +4099,7 @@ func padPlain(s string, width int) string {
 }
 
 func frameLine(s string, width int) string {
+	s = expandDisplayTabs(s)
 	if width <= 0 {
 		return s + "\x1b[K"
 	}
@@ -4104,6 +4107,7 @@ func frameLine(s string, width int) string {
 }
 
 func truncateVisible(s string, width int) string {
+	s = expandDisplayTabs(s)
 	if width <= 0 {
 		return ""
 	}
@@ -4116,6 +4120,46 @@ func truncateVisible(s string, width int) string {
 		return takeVisible(s, width)
 	}
 	return takeVisible(s, width-tailWidth) + tail
+}
+
+const displayTabWidth = 4
+
+func expandDisplayTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	visibleWidth := 0
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '\x1b' {
+			b.WriteRune(runes[i])
+			if i+1 < len(runes) && runes[i+1] == '[' {
+				for i+1 < len(runes) {
+					i++
+					b.WriteRune(runes[i])
+					if isCSIEnd(runes[i]) {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if runes[i] == '\t' {
+			spaces := displayTabWidth - visibleWidth%displayTabWidth
+			b.WriteString(strings.Repeat(" ", spaces))
+			visibleWidth += spaces
+			continue
+		}
+		b.WriteRune(runes[i])
+		visibleWidth += lipgloss.Width(string(runes[i]))
+	}
+	return b.String()
+}
+
+func isCSIEnd(r rune) bool {
+	return r >= 0x40 && r <= 0x7e
 }
 
 func takeVisible(s string, width int) string {

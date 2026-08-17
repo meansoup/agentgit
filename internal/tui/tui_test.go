@@ -1486,6 +1486,33 @@ func TestFrameLineClearsAndPadsLongLines(t *testing.T) {
 	}
 }
 
+func TestFrameLineExpandsTabsBeforeMeasuringWidth(t *testing.T) {
+	got := frameLine("func\tmain() {}", 20)
+	stripped := ansi.Strip(got)
+
+	if strings.Contains(stripped, "\t") {
+		t.Fatalf("frameLine retained display tab: %q", stripped)
+	}
+	if !strings.Contains(stripped, "func    main") {
+		t.Fatalf("frameLine did not expand tab at display stop: %q", stripped)
+	}
+	if width := ansi.StringWidth(stripped); width != 20 {
+		t.Fatalf("frameLine width = %d, want 20: %q", width, stripped)
+	}
+}
+
+func TestTruncateVisibleExpandsStyledTabs(t *testing.T) {
+	got := truncateVisible("\x1b[31m\treturn nil\x1b[0m", 10)
+	stripped := ansi.Strip(got)
+
+	if strings.Contains(stripped, "\t") {
+		t.Fatalf("truncateVisible retained display tab: %q", stripped)
+	}
+	if width := ansi.StringWidth(stripped); width > 10 {
+		t.Fatalf("truncateVisible width = %d, want <= 10: %q", width, stripped)
+	}
+}
+
 func TestFilesViewMarksFileStatuses(t *testing.T) {
 	m := model{
 		commits: []git.Commit{{Hash: "abc", ShortHash: "abc"}},
