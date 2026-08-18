@@ -115,6 +115,7 @@ type model struct {
 
 const renderedFileCacheLimit = 50
 const recentFilesLimit = 20
+const mouseWheelScrollLines = 3
 
 type imageOpenMsg struct {
 	err error
@@ -242,7 +243,7 @@ func Run(root string, limit int) error {
 		embedded:           os.Getenv("AGENTGIT_EMBEDDED_BROWSER") == "1",
 	}
 	m.loadCommitFiles()
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -339,6 +340,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+	case tea.MouseMsg:
+		if m.helpOpen {
+			return m, nil
+		}
+		if m.searchOpen {
+			m.updateSearchMouse(msg)
+			return m, nil
+		}
+		m.handleMouse(msg)
 	case tea.KeyMsg:
 		if m.searchOpen {
 			return m.updateSearch(msg)
@@ -534,6 +544,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) handleMouse(msg tea.MouseMsg) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.clearNotice()
+		m.move(-mouseWheelScrollLines)
+	case tea.MouseButtonWheelDown:
+		m.clearNotice()
+		m.move(mouseWheelScrollLines)
+	}
+}
+
 func (m *model) quitCmd() tea.Cmd {
 	if m.requestsCmdCancel != nil {
 		m.requestsCmdCancel()
@@ -569,6 +590,17 @@ func (m *model) handleGitShortcut(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func (m *model) updateSearchMouse(msg tea.MouseMsg) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.searchIdx = clamp(m.searchIdx-mouseWheelScrollLines, 0, len(m.searchResults)-1)
+		m.syncCurrentSearchScroll()
+	case tea.MouseButtonWheelDown:
+		m.searchIdx = clamp(m.searchIdx+mouseWheelScrollLines, 0, len(m.searchResults)-1)
+		m.syncCurrentSearchScroll()
+	}
 }
 
 func (m model) pushCmd() tea.Cmd {
@@ -2021,7 +2053,7 @@ func (m model) helpEntries() []helpEntry {
 	switch m.mode {
 	case modeCommits:
 		return append([]helpEntry{
-			{"up/down", "Move cursor", "select a commit"},
+			{"up/down/wheel", "Move cursor", "select a commit"},
 			{"enter/right", "Open files", "show files changed by the selected commit"},
 			{"s", "Select mode", "select latest commits for merge or delete"},
 			{"tab", "Directories", "switch to directory summary"},
@@ -2039,7 +2071,7 @@ func (m model) helpEntries() []helpEntry {
 			}, entries...)
 		}
 		return append([]helpEntry{
-			{"up/down", "Move cursor", "select a commit"},
+			{"up/down/wheel", "Move cursor", "select a commit"},
 			{"space", "Toggle", "include or exclude the selected commit"},
 			{"x", "Delete", "remove the selected latest commit range"},
 			{"m", "Merge", "squash the selected latest commit range"},
@@ -2049,7 +2081,7 @@ func (m model) helpEntries() []helpEntry {
 		}, entries...)
 	case modeDirectories:
 		return append([]helpEntry{
-			{"up/down", "Move cursor", "select a directory or file path"},
+			{"up/down/wheel", "Move cursor", "select a directory or file path"},
 			{"enter/right", "Toggle/open", "toggle folders or open the selected file path"},
 			{"left", "Collapse", "collapse the selected depth to its parent folder"},
 			{"tab", "Commits", "switch to commit list"},
@@ -2069,7 +2101,7 @@ func (m model) helpEntries() []helpEntry {
 				backDescription = "return to commits"
 			}
 			return append([]helpEntry{
-				{"up/down", "Move cursor", "select a changed file"},
+				{"up/down/wheel", "Move cursor", "select a changed file"},
 				{"enter", "Open image", openDescription},
 				{"right", rightAction, rightDescription},
 				{"left/backspace", "Back", backDescription},
@@ -2077,14 +2109,14 @@ func (m model) helpEntries() []helpEntry {
 			}, entries...)
 		}
 		return append([]helpEntry{
-			{"up/down", "Move cursor", "select a changed file"},
+			{"up/down/wheel", "Move cursor", "select a changed file"},
 			{"enter/right", "Open diff", "show the file diff"},
 			{"left/backspace", "Back", "return to commits"},
 			{"r", "Refresh", "reload commits and files"},
 		}, entries...)
 	case modeDiff:
 		return append([]helpEntry{
-			{"up/down", "Scroll", "move through diff lines"},
+			{"up/down/wheel", "Scroll", "move through diff lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"/", "Find", "search within the current diff"},
 			{"ctrl+f", "Find", "same as /"},
@@ -2098,7 +2130,7 @@ func (m model) helpEntries() []helpEntry {
 		}, entries...)
 	case modeFullFile:
 		fullEntries := []helpEntry{
-			{"up/down", "Scroll", "move through file lines"},
+			{"up/down/wheel", "Scroll", "move through file lines"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"/", "Find", "search within the current file"},
 			{"ctrl+f", "Find", "same as /"},
@@ -2117,7 +2149,7 @@ func (m model) helpEntries() []helpEntry {
 		return append(fullEntries, entries...)
 	case modeRequest:
 		return append([]helpEntry{
-			{"up/down", "Scroll", "move through request text"},
+			{"up/down/wheel", "Scroll", "move through request text"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"w", "Wrap lines", "show complete long request lines"},
 			{"left/backspace", "Back", "return to request drawer"},

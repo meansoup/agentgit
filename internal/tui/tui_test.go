@@ -1444,6 +1444,75 @@ func TestMoveInFilesDoesNotLoadDiff(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsTextViews(t *testing.T) {
+	m := model{
+		commits:   []git.Commit{{Hash: "abc", ShortHash: "abc", Subject: "test"}},
+		files:     []string{"file.go"},
+		diffLines: []string{"@@ -1 +1 @@", " one", " two", " three", " four", " five"},
+		mode:      modeDiff,
+	}
+
+	updated, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	got := updated.(model)
+	if got.scroll != mouseWheelScrollLines {
+		t.Fatalf("scroll after wheel down = %d, want %d", got.scroll, mouseWheelScrollLines)
+	}
+
+	updated, _ = got.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	got = updated.(model)
+	if got.scroll != 0 {
+		t.Fatalf("scroll after wheel up = %d, want 0", got.scroll)
+	}
+}
+
+func TestMouseWheelMovesListSelection(t *testing.T) {
+	m := model{
+		mode: modeDirectories,
+		dirEntries: []directoryEntry{
+			{Path: "a.go", DisplayName: "a.go"},
+			{Path: "b.go", DisplayName: "b.go"},
+			{Path: "c.go", DisplayName: "c.go"},
+			{Path: "d.go", DisplayName: "d.go"},
+		},
+	}
+
+	updated, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	got := updated.(model)
+	if got.dirIdx != mouseWheelScrollLines {
+		t.Fatalf("dirIdx after wheel down = %d, want %d", got.dirIdx, mouseWheelScrollLines)
+	}
+
+	updated, _ = got.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	got = updated.(model)
+	if got.dirIdx != 0 {
+		t.Fatalf("dirIdx after wheel up = %d, want 0", got.dirIdx)
+	}
+}
+
+func TestMouseWheelMovesSearchResults(t *testing.T) {
+	m := model{
+		searchOpen: true,
+		searchResults: []fileSearchResult{
+			{Path: "a.go"},
+			{Path: "b.go"},
+			{Path: "c.go"},
+			{Path: "d.go"},
+		},
+	}
+
+	updated, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	got := updated.(model)
+	if got.searchIdx != mouseWheelScrollLines {
+		t.Fatalf("searchIdx after wheel down = %d, want %d", got.searchIdx, mouseWheelScrollLines)
+	}
+
+	updated, _ = got.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	got = updated.(model)
+	if got.searchIdx != 0 {
+		t.Fatalf("searchIdx after wheel up = %d, want 0", got.searchIdx)
+	}
+}
+
 func TestViewFilesBodyRendersOnlyVisibleWindow(t *testing.T) {
 	var files []string
 	for i := 0; i < 1000; i++ {

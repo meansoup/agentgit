@@ -36,7 +36,7 @@
 
 상단 컨텍스트 바에는 base path, Git branch, HEAD, 커밋 수, dirty 파일 수가 표시됩니다.
 
-- **이동**: `Up`/`Down`
+- **이동**: `Up`/`Down` 또는 마우스 휠
 - **커밋/디렉토리 뷰 전환**: `Tab`
 - **최신 커밋 선택**: `s` 진입, `Space` 선택, `x` 삭제, `m` 병합, `y` 확인
 - **파일 검색**: `Ctrl+P` 입력 후 fuzzy 검색하고 `Enter`로 Directory 뷰에서 파일 위치 열기

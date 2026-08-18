@@ -36,7 +36,7 @@ If no command is provided, `agentgit` uses `AGENTGIT_AGENT` when set, otherwise 
 
 The top context bar shows the base path, Git branch, HEAD, commit count, and dirty file count.
 
-- **Move**: `Up`/`Down`
+- **Move**: `Up`/`Down` or mouse wheel
 - **Toggle Commit/Directory View**: `Tab`
 - **Select latest commits**: `s`, then `Space` to select, `x` to delete, `m` to merge, `y` to confirm
 - **Search files**: `Ctrl+P`, type a fuzzy query, then `Enter` to reveal the file in Directory view
