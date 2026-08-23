@@ -36,6 +36,7 @@ const (
 	modeFiles
 	modeDiff
 	modeFullFile
+	modeRequests
 	modeRequest
 	modeSelect
 )
@@ -442,7 +443,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lineNums = !m.lineNums
 			}
 		case "w":
-			if m.mode == modeCommits || m.mode == modeRequest || m.mode == modeDiff || m.mode == modeFullFile {
+			if m.mode == modeCommits || m.mode == modeRequests || m.mode == modeRequest || m.mode == modeDiff || m.mode == modeFullFile {
 				m.wrapLines = !m.wrapLines
 				m.scroll = 0
 				if m.wrapLines && m.mode == modeDiff {
@@ -452,8 +453,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.clearNotice()
 			return m, m.refresh()
-		case "v":
-			m.toggleRequestDrawer()
+		case "a":
+			m.toggleRequestsView()
 		case "n":
 			if m.mode == modeSelect && m.pending != selectActionNone {
 				m.cancelPendingSelectAction()
@@ -814,6 +815,8 @@ func (m model) contentView() (string, int) {
 		return m.viewDiff(), 2
 	case modeFullFile:
 		return m.viewFullFile(), 2
+	case modeRequests:
+		return m.viewRequestsList(width), m.requestFocusLine()
 	case modeRequest:
 		return m.viewRequestFull(), 2
 	default:
@@ -1660,6 +1663,8 @@ func (m model) panelTitle() string {
 		title = "Diff View"
 	case modeFullFile:
 		title = "File View"
+	case modeRequests:
+		title = "Requests"
 	case modeRequest:
 		title = "Request View"
 	}
@@ -1723,6 +1728,14 @@ func (m model) panelTitleDetail() string {
 			file += " | " + status
 		}
 		return file
+	case modeRequests:
+		if req, ok := m.selectedRequest(); ok {
+			return fmt.Sprintf("%d requests | %s | %s", len(m.requests), req.Agent, requestPreviewMessage(req.Message))
+		}
+		if m.requestsLoading {
+			return "loading requests"
+		}
+		return "no requests"
 	case modeRequest:
 		if req, ok := m.selectedRequest(); ok {
 			return fmt.Sprintf("%s | %s", req.Agent, requestPreviewMessage(req.Message))
@@ -1797,23 +1810,27 @@ func (m model) commandContextLine() string {
 	}
 	switch m.mode {
 	case modeCommits:
-		return "[Ctrl+P] Files  [Ctrl+E] Recent  [Alt+/] Grep  [g p] Push  [g b d] Delete merged  [?] Help" + returnCommand
+		return "[a] Requests  [Ctrl+P] Files  [Ctrl+E] Recent  [Alt+/] Grep  [g p] Push  [?] Help" + returnCommand
 	case modeSelect:
 		if m.pending != selectActionNone {
 			return "[y] Confirm  [n/Esc] Cancel  [?] Help"
 		}
 		return "[Space] Select  [x] Delete  [m] Merge  [s] Back  [?] Help" + returnCommand
+	case modeDirectories:
+		return "[a] Requests  [Enter] Open  [Tab] Commits  [Ctrl+P] Files  [Alt+/] Grep  [?] Help" + returnCommand
 	case modeDiff:
-		return "[w] Wrap  [l] Lines  [f] Full file  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
+		return "[f] Full  [a] Requests  [w] Wrap  [l] Lines  [/] Find  [Ctrl+E] Recent" + returnCommand
 	case modeFullFile:
 		if m.worktreeFile {
-			return "[w] Wrap  [l] Lines  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
+			return "[a] Requests  [w] Wrap  [l] Lines  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
 		}
-		return "[w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+E] Recent  [Ctrl+P] Files" + returnCommand
+		return "[a] Requests  [w] Wrap  [l] Lines  [f] Diff  [/] Find  [Ctrl+E] Recent" + returnCommand
+	case modeRequests:
+		return "[Enter] Open  [a/Left] Back  [r] Refresh  [Ctrl+P] Files  [?] Help" + returnCommand
 	case modeRequest:
-		return "[w] Wrap  [v] Back  [Ctrl+P] Files  [?] Help" + returnCommand
+		return "[w] Wrap  [a/Left] Back  [Ctrl+P] Files  [?] Help" + returnCommand
 	}
-	return "[Ctrl+P] Files  [Alt+/] Grep  [?] Help" + returnCommand
+	return "[a] Requests  [Ctrl+P] Files  [Alt+/] Grep  [?] Help" + returnCommand
 }
 
 func onOff(enabled bool) string {
@@ -1825,8 +1842,8 @@ func onOff(enabled bool) string {
 
 func (m model) selectionTitle() string {
 	switch m.mode {
-	case modeCommits, modeRequest, modeSelect:
-		if m.mode == modeRequest {
+	case modeCommits, modeRequests, modeRequest, modeSelect:
+		if m.mode == modeRequests || m.mode == modeRequest {
 			if req, ok := m.selectedRequest(); ok {
 				return truncateVisible(fmt.Sprintf("%s %s", req.Agent, requestPreviewMessage(req.Message)), 80)
 			}
@@ -2057,7 +2074,7 @@ func (m model) helpEntries() []helpEntry {
 			{"enter/right", "Open files", "show files changed by the selected commit"},
 			{"s", "Select mode", "select latest commits for merge or delete"},
 			{"tab", "Directories", "switch to directory summary"},
-			{"v", "Requests", "toggle transcript request drawer"},
+			{"a", "Requests", "open transcript requests"},
 			{"w", "Wrap lines", "show complete commit lines"},
 			{"r", "Refresh", "reload commits and transcripts"},
 			m.exitHelpEntry(),
@@ -2085,7 +2102,7 @@ func (m model) helpEntries() []helpEntry {
 			{"enter/right", "Toggle/open", "toggle folders or open the selected file path"},
 			{"left", "Collapse", "collapse the selected depth to its parent folder"},
 			{"tab", "Commits", "switch to commit list"},
-			{"v", "Requests", "toggle transcript request drawer"},
+			{"a", "Requests", "open transcript requests"},
 			{"r", "Refresh", "reload commits and transcripts"},
 			m.exitHelpEntry(),
 		}, entries...)
@@ -2147,12 +2164,20 @@ func (m model) helpEntries() []helpEntry {
 			)
 		}
 		return append(fullEntries, entries...)
+	case modeRequests:
+		return append([]helpEntry{
+			{"up/down/wheel", "Move cursor", "select a request"},
+			{"enter/right", "Open request", "show request details"},
+			{"a/left/backspace", "Back", "return to the previous view"},
+			{"w", "Wrap lines", "show complete request list lines"},
+			{"r", "Refresh", "reload transcripts"},
+		}, entries...)
 	case modeRequest:
 		return append([]helpEntry{
 			{"up/down/wheel", "Scroll", "move through request text"},
 			{"pgup/pgdn", "Page", "scroll by one page"},
 			{"w", "Wrap lines", "show complete long request lines"},
-			{"left/backspace", "Back", "return to request drawer"},
+			{"a/left/backspace", "Back", "return to request list"},
 			{"r", "Refresh", "reload transcripts"},
 		}, entries...)
 	default:
@@ -2183,6 +2208,8 @@ func (m *model) move(delta int) {
 		m.dirIdx = clamp(m.dirIdx+delta, 0, len(m.visibleDirectoryEntries())-1)
 	case modeFiles:
 		m.fileIdx = clamp(m.fileIdx+delta, 0, len(m.files)-1)
+	case modeRequests:
+		m.requestIdx = clamp(m.requestIdx+delta, 0, len(m.requests)-1)
 	case modeDiff, modeFullFile, modeRequest:
 		m.scroll = max(0, m.scroll+delta)
 	}
@@ -2289,6 +2316,13 @@ func (m *model) enter(openImages bool) tea.Cmd {
 		m.rememberCurrentFile()
 		m.scroll = 0
 		m.mode = modeDiff
+	case modeRequests:
+		if len(m.requests) == 0 {
+			return nil
+		}
+		m.requestReturn = modeRequests
+		m.scroll = 0
+		m.mode = modeRequest
 	}
 	return nil
 }
@@ -2305,8 +2339,14 @@ func (m *model) back() {
 	case modeDiff:
 		m.mode = modeFiles
 	case modeRequest:
+		returnMode := m.requestReturnMode()
+		m.mode = returnMode
+		m.requestDrawer = returnMode != modeRequests
+		m.scroll = 0
+	case modeRequests:
 		m.mode = m.requestReturnMode()
-		m.requestDrawer = true
+		m.requestDrawer = false
+		m.scroll = 0
 	case modeFiles:
 		if m.fileReturn == modeDirectories {
 			m.mode = modeDirectories
@@ -2431,7 +2471,7 @@ func (m *model) refresh() tea.Cmd {
 	if m.worktreeFile {
 		m.files = []string{selectedFile}
 		m.fileIdx = 0
-	} else if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequest && m.mode != modeSelect {
+	} else if m.mode != modeCommits && m.mode != modeDirectories && m.mode != modeRequests && m.mode != modeRequest && m.mode != modeSelect {
 		m.files = append([]string(nil), m.fileCache[m.commits[m.commitIdx].Hash]...)
 		m.fileIdx = 0
 		for i, file := range m.files {
@@ -2521,6 +2561,24 @@ func (m *model) toggleRequestDrawer() {
 	}
 	m.requestDrawer = !m.requestDrawer
 	m.scroll = 0
+}
+
+func (m *model) toggleRequestsView() {
+	switch m.mode {
+	case modeRequests:
+		m.mode = m.requestReturnMode()
+		m.requestDrawer = false
+		m.scroll = 0
+	case modeRequest:
+		m.mode = modeRequests
+		m.requestDrawer = false
+		m.scroll = 0
+	default:
+		m.requestReturn = m.mode
+		m.requestDrawer = false
+		m.mode = modeRequests
+		m.scroll = 0
+	}
 }
 
 func (m *model) toggleSelectMode() {
@@ -4257,6 +4315,8 @@ func (m model) modeName() string {
 		return "diff"
 	case modeFullFile:
 		return "full"
+	case modeRequests:
+		return "requests"
 	case modeRequest:
 		return "request"
 	case modeSelect:

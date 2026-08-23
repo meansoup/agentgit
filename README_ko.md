@@ -45,7 +45,7 @@
 - **상세 보기**: `Right` 또는 `Enter` (커밋 → 파일 목록 → Diff)
 - **이미지 열기**: 파일 목록에서 이미지 파일 선택 후 `Enter`
 - **뒤로 가기**: `Left` 또는 `Backspace`
-- **Request 드로어**: `v`로 하단 드로어 열기/닫기, `Enter`로 전체 request 상세 보기
+- **Agent requests**: `a`로 전체 화면 request view 열기, `Enter`로 request 상세 보기
 - **Push**: `g` 다음 `p`로 `git push` 실행
 - **머지된 브랜치 삭제**: `g` 다음 `b` 다음 `d`로 `git branch --merged` 기준 로컬 브랜치 삭제. 현재 브랜치와 `main`/`master`/`develop`/`dev`는 제외
 - **새로고침**: `r`

@@ -45,7 +45,7 @@ The top context bar shows the base path, Git branch, HEAD, commit count, and dir
 - **Drill down**: `Right` or `Enter` (Commit → Files → Diff)
 - **Open image**: `Enter` on an image file in the file list
 - **Go back**: `Left` or `Backspace`
-- **Request drawer**: `v` toggles a bottom drawer; `Enter` opens full request details
+- **Agent requests**: `a` opens the full-screen request view; `Enter` opens request details
 - **Push**: `g` then `p` runs `git push`
 - **Delete merged branches**: `g` then `b` then `d` deletes local branches from `git branch --merged`, excluding the current branch and `main`/`master`/`develop`/`dev`
 - **Refresh**: `r`

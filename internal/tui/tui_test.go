@@ -657,6 +657,7 @@ func TestStatusBarKeepsFixedDimensionsAcrossViews(t *testing.T) {
 			modeFiles,
 			modeDiff,
 			modeFullFile,
+			modeRequests,
 			modeRequest,
 		} {
 			m := model{
@@ -1183,6 +1184,79 @@ func TestRequestDrawerEnterOpensFullRequest(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("request full view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestAOpensFullScreenRequestsView(t *testing.T) {
+	m := model{
+		mode: modeCommits,
+		requests: []transcript.Request{
+			{ID: "7", Agent: "codex", Model: "gpt-5", Message: "first request", Timestamp: "2026-06-25T00:00:00Z"},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	got := updated.(model)
+
+	if got.mode != modeRequests {
+		t.Fatalf("mode after a = %v, want modeRequests", got.mode)
+	}
+	if got.requestDrawer {
+		t.Fatal("requestDrawer = true, want false for full screen requests view")
+	}
+	view := ansi.Strip(got.View())
+	if !strings.Contains(view, "Requests") || !strings.Contains(view, "first request") {
+		t.Fatalf("full screen requests view missing request list:\n%s", view)
+	}
+}
+
+func TestRequestsViewEnterOpensRequestDetailsAndBackReturnsToList(t *testing.T) {
+	m := model{
+		mode: modeRequests,
+		requests: []transcript.Request{
+			{ID: "7", Agent: "codex", Model: "gpt-5", Message: "full request body", Response: "full response body", Timestamp: "2026-06-25T00:00:00Z"},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+	if got.mode != modeRequest {
+		t.Fatalf("mode after Enter = %v, want modeRequest", got.mode)
+	}
+	if got.requestReturn != modeRequests {
+		t.Fatalf("requestReturn = %v, want modeRequests", got.requestReturn)
+	}
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	got = updated.(model)
+	if got.mode != modeRequests {
+		t.Fatalf("mode after Left = %v, want modeRequests", got.mode)
+	}
+	if got.requestDrawer {
+		t.Fatal("requestDrawer = true after returning to request list")
+	}
+}
+
+func TestVNoLongerOpensRequestsView(t *testing.T) {
+	m := model{
+		mode: modeCommits,
+		requests: []transcript.Request{
+			{ID: "7", Agent: "codex", Message: "request"},
+		},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	got := updated.(model)
+
+	if got.mode != modeCommits {
+		t.Fatalf("mode after v = %v, want modeCommits", got.mode)
+	}
+	if got.requestDrawer {
+		t.Fatal("requestDrawer = true after v, want false")
 	}
 }
 
