@@ -1,13 +1,13 @@
 # agentgit
 
-**agentgit** is a Git-aware command workspace. It opens a project terminal with a persistent one-line command bar, and it can jump into Git history plus local agent transcript browsing.
+**agentgit** is a Git-aware command workspace. It opens a project terminal directly, and it can jump into Git history plus local agent transcript browsing.
 
 [한국어 문서 (README_ko.md)](./README_ko.md)
 
 ## Quick Start
 
 1. **Install**: Place the `agentgit` binary in your `PATH`.
-2. **Use**: Run `agentgit` in a repository to start a shell inside the tmux-like wrapper:
+2. **Use**: Run `agentgit` in a repository to start a shell using your terminal directly:
    ```sh
    agentgit
    ```
@@ -16,19 +16,17 @@
 
 | Command | Description |
 | :--- | :--- |
-| `agentgit` | Run your default shell inside the wrapper. |
-| `agentgit -- codex` | Run a specific command inside the wrapper. |
+| `agentgit` | Run your default shell in the current terminal. |
+| `agentgit -- codex` | Run a specific command in the current terminal. |
 | `agentgit browse` | Open the history browser for the current directory. |
 | `agentgit browse [path]` | Browse history for a specific repo, folder, or file. |
 | `agentgit browse --limit 50` | Limit the number of commits shown in the browser. |
 
-## Terminal Wrapper
+## Terminal
 
-`agentgit` starts your shell, or a configured command, in the current repository through a PTY. The command terminal gets the full terminal minus the bottom status line, and `agentgit` owns that last line for opening the commit browser.
+`agentgit` connects your shell, or a configured command, directly to the current terminal in the repository. The terminal emulator and the command itself own the full screen, including cursor movement, scrollback, input modes, and window resizing.
 
-- **Status line**: current branch, server gap (`↑` ahead / `↓` behind), and uncommitted file/line counts (`+` additions / `-` deletions)
-- **Open commit browser**: `Ctrl+G`
-- **Return from commit browser to the agent**: `Esc`
+To open the Git browser, run `agentgit browse` in another terminal or after the command exits.
 
 If no command is provided, `agentgit` uses `AGENTGIT_AGENT` when set, otherwise it opens `$SHELL`. Pass a command after `--` to start something specific, such as `agentgit -- claude`.
 

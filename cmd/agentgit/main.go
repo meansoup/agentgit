@@ -53,10 +53,10 @@ func usage() {
   agentgit version
 
 commands:
-  agentgit                             run the default shell inside agentgit's terminal wrapper
-  agentgit -- codex                    run a specific agent command inside the wrapper
+  agentgit                             run the default shell with the real terminal directly
+  agentgit -- codex                    run a specific agent command with the real terminal directly
   browse                               open the Git history and transcript browser directly
-  terminal                             alias for the default terminal wrapper
+  terminal                             alias for the default terminal command
   version                              print version`)
 }
 
